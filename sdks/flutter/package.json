@@ -1,0 +1,10 @@
+{
+  "name": "@agentation-mobile/flutter-sdk",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Placeholder for Flutter SDK (Dart package, managed separately)",
+  "scripts": {
+    "build": "echo 'Flutter SDK is a Dart package — see pubspec.yaml'",
+    "clean": "echo 'no-op'"
+  }
+}

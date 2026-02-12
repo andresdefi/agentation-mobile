@@ -1,0 +1,29 @@
+{
+  "name": "agentation-mobile",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Mobile UI annotation tool for AI coding agents",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/andresdefi/agentation-mobile.git"
+  },
+  "packageManager": "pnpm@9.15.4",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "turbo build",
+    "dev": "turbo dev",
+    "lint": "turbo lint",
+    "test": "turbo test",
+    "check": "biome check .",
+    "check:fix": "biome check --fix .",
+    "clean": "turbo clean"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.4",
+    "turbo": "^2.3.3",
+    "typescript": "^5.7.3"
+  }
+}
