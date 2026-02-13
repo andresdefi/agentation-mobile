@@ -40,6 +40,15 @@ async function isAdbAvailable(): Promise<boolean> {
 	}
 }
 
+async function isXcrunAvailable(): Promise<boolean> {
+	try {
+		await execFile("xcrun", ["simctl", "help"], { timeout: ADB_TIMEOUT_MS });
+		return true;
+	} catch {
+		return false;
+	}
+}
+
 interface AdbDevice {
 	id: string;
 	name: string;
@@ -83,15 +92,11 @@ async function listAdbDevices(): Promise<AdbDevice[]> {
 	}
 }
 
-async function getAdbScreenSize(
-	deviceId: string,
-): Promise<{ width: number; height: number }> {
+async function getAdbScreenSize(deviceId: string): Promise<{ width: number; height: number }> {
 	try {
-		const { stdout } = await execFile(
-			"adb",
-			["-s", deviceId, "shell", "wm", "size"],
-			{ timeout: ADB_TIMEOUT_MS },
-		);
+		const { stdout } = await execFile("adb", ["-s", deviceId, "shell", "wm", "size"], {
+			timeout: ADB_TIMEOUT_MS,
+		});
 		const match = stdout.match(/(\d+)x(\d+)/);
 		if (match) {
 			return { width: Number(match[1]), height: Number(match[2]) };
@@ -113,6 +118,133 @@ async function getAdbOsVersion(deviceId: string): Promise<string> {
 	} catch {
 		return "unknown";
 	}
+}
+
+// ---------------------------------------------------------------------------
+// iOS Simulator helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * iOS simulator UDIDs are 36-character UUID strings with dashes,
+ * e.g. "A1B2C3D4-E5F6-7890-ABCD-EF1234567890".
+ * Android device IDs are like "emulator-5554" or "192.168.x.x:5555".
+ */
+const IOS_UDID_REGEX = /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/i;
+
+function isIosSimulatorId(deviceId: string): boolean {
+	return IOS_UDID_REGEX.test(deviceId);
+}
+
+interface SimctlDevice {
+	udid: string;
+	name: string;
+	state: string;
+	isAvailable?: boolean;
+	deviceTypeIdentifier?: string;
+}
+
+interface SimctlRuntime {
+	[runtimeId: string]: SimctlDevice[];
+}
+
+interface SimctlListOutput {
+	devices: SimctlRuntime;
+}
+
+/**
+ * Common iOS simulator screen sizes keyed by device name substrings.
+ * Used as a fallback when dynamic detection is not available.
+ */
+const IOS_SCREEN_SIZES: Record<string, { width: number; height: number }> = {
+	"iPhone 16 Pro Max": { width: 440, height: 956 },
+	"iPhone 16 Pro": { width: 402, height: 874 },
+	"iPhone 16 Plus": { width: 430, height: 932 },
+	"iPhone 16": { width: 393, height: 852 },
+	"iPhone 15 Pro Max": { width: 430, height: 932 },
+	"iPhone 15 Pro": { width: 393, height: 852 },
+	"iPhone 15 Plus": { width: 430, height: 932 },
+	"iPhone 15": { width: 393, height: 852 },
+	"iPhone 14 Pro Max": { width: 430, height: 932 },
+	"iPhone 14 Pro": { width: 393, height: 852 },
+	"iPhone 14 Plus": { width: 428, height: 926 },
+	"iPhone 14": { width: 390, height: 844 },
+	"iPhone SE": { width: 375, height: 667 },
+	"iPad Pro (12.9-inch)": { width: 1024, height: 1366 },
+	"iPad Pro (11-inch)": { width: 834, height: 1194 },
+	"iPad Air": { width: 820, height: 1180 },
+	"iPad mini": { width: 744, height: 1133 },
+	iPad: { width: 810, height: 1080 },
+};
+
+function lookupIosScreenSize(deviceName: string): { width: number; height: number } {
+	for (const [key, size] of Object.entries(IOS_SCREEN_SIZES)) {
+		if (deviceName.includes(key)) return size;
+	}
+	// Fallback for unknown devices
+	return { width: 390, height: 844 };
+}
+
+function extractIosVersion(runtimeId: string): string {
+	// Runtime IDs look like "com.apple.CoreSimulator.SimRuntime.iOS-17-4"
+	const match = runtimeId.match(/iOS[- ](\d+)[- .](\d+)/i);
+	if (match) return `iOS ${match[1]}.${match[2]}`;
+	// Try a simpler match for "iOS-17-4" or similar
+	const simple = runtimeId.match(/(\d+)[.-](\d+)$/);
+	if (simple) return `iOS ${simple[1]}.${simple[2]}`;
+	return "iOS unknown";
+}
+
+interface IosSimDevice {
+	id: string;
+	name: string;
+	osVersion: string;
+	screenWidth: number;
+	screenHeight: number;
+}
+
+async function listIosSimulators(): Promise<IosSimDevice[]> {
+	try {
+		const { stdout } = await execFile("xcrun", ["simctl", "list", "devices", "-j"], {
+			timeout: ADB_TIMEOUT_MS,
+		});
+
+		const parsed = JSON.parse(stdout) as SimctlListOutput;
+		const devices: IosSimDevice[] = [];
+
+		for (const [runtimeId, runtimeDevices] of Object.entries(parsed.devices)) {
+			for (const sim of runtimeDevices) {
+				if (sim.state !== "Booted") continue;
+				// Skip unavailable simulators (isAvailable can be false or missing)
+				if (sim.isAvailable === false) continue;
+
+				const screen = lookupIosScreenSize(sim.name);
+				devices.push({
+					id: sim.udid,
+					name: sim.name,
+					osVersion: extractIosVersion(runtimeId),
+					screenWidth: screen.width,
+					screenHeight: screen.height,
+				});
+			}
+		}
+
+		return devices;
+	} catch {
+		return [];
+	}
+}
+
+async function captureIosSimulatorScreen(deviceId: string): Promise<Buffer> {
+	const { stdout } = await execFile(
+		"xcrun",
+		["simctl", "io", deviceId, "screenshot", "--type=png", "/dev/stdout"],
+		{
+			timeout: ADB_TIMEOUT_MS,
+			maxBuffer: 50 * 1024 * 1024,
+			encoding: "buffer" as unknown as string,
+		},
+	);
+	return stdout as unknown as Buffer;
 }
 
 // ---------------------------------------------------------------------------
@@ -143,9 +275,7 @@ function pickCdpTarget(targets: CdpTarget[]): CdpTarget | null {
 	const preferred = targets.find(
 		(t) =>
 			t.webSocketDebuggerUrl &&
-			(t.title?.includes("React") ||
-				t.title?.includes("Hermes") ||
-				t.title?.includes("Metro")),
+			(t.title?.includes("React") || t.title?.includes("Hermes") || t.title?.includes("Metro")),
 	);
 	if (preferred) return preferred;
 	// Fall back to first target with a ws URL
@@ -415,7 +545,7 @@ function parseUiAutomatorXml(xml: string): MobileElement[] {
 		const bbox = parseBounds(bounds);
 
 		const shortName = className.includes(".")
-			? className.split(".").pop() ?? className
+			? (className.split(".").pop() ?? className)
 			: className;
 
 		elements.push({
@@ -447,9 +577,12 @@ function extractAttr(attrs: string, name: string): string | null {
 	return m ? m[1] : null;
 }
 
-function parseBounds(
-	bounds: string | null,
-): { x: number; y: number; width: number; height: number } {
+function parseBounds(bounds: string | null): {
+	x: number;
+	y: number;
+	width: number;
+	height: number;
+} {
 	if (!bounds) return { x: 0, y: 0, width: 0, height: 0 };
 	const m = bounds.match(/\[(\d+),(\d+)\]\[(\d+),(\d+)\]/);
 	if (!m) return { x: 0, y: 0, width: 0, height: 0 };
@@ -468,21 +601,24 @@ export class ReactNativeBridge implements IPlatformBridge {
 	readonly platform = "react-native" as const;
 
 	async isAvailable(): Promise<boolean> {
-		const [metro, adb] = await Promise.all([
+		const [metro, adb, xcrun] = await Promise.all([
 			isMetroRunning(),
 			isAdbAvailable(),
+			isXcrunAvailable(),
 		]);
-		return metro || adb;
+		return metro || adb || xcrun;
 	}
 
 	async listDevices(): Promise<DeviceInfo[]> {
-		const [adbDevices, metroUp] = await Promise.all([
+		const [adbDevices, iosSimDevices, metroUp] = await Promise.all([
 			listAdbDevices(),
+			listIosSimulators(),
 			isMetroRunning(),
 		]);
 
 		const devices: DeviceInfo[] = [];
 
+		// --- Android devices (via ADB) ---
 		const enriched = await Promise.all(
 			adbDevices.map(async (dev) => {
 				const [screen, osVersion] = await Promise.all([
@@ -505,7 +641,20 @@ export class ReactNativeBridge implements IPlatformBridge {
 			});
 		}
 
-		// If Metro is running but no ADB devices found, report a virtual Metro device
+		// --- iOS simulators (via xcrun simctl) ---
+		for (const sim of iosSimDevices) {
+			devices.push({
+				id: sim.id,
+				name: sim.name,
+				platform: "react-native",
+				isEmulator: true,
+				osVersion: sim.osVersion,
+				screenWidth: sim.screenWidth,
+				screenHeight: sim.screenHeight,
+			});
+		}
+
+		// If Metro is running but no devices found at all, report a virtual Metro device
 		if (metroUp && devices.length === 0) {
 			devices.push({
 				id: `metro-${METRO_HOST}:${METRO_PORT}`,
@@ -524,50 +673,52 @@ export class ReactNativeBridge implements IPlatformBridge {
 	async captureScreen(deviceId: string): Promise<Buffer> {
 		if (deviceId.startsWith("metro-")) {
 			throw new Error(
-				"Cannot capture screen from Metro-only device. Connect an Android emulator or device.",
+				"Cannot capture screen from Metro-only device. Connect an emulator, simulator, or device.",
 			);
 		}
 
+		// iOS simulator — use xcrun simctl
+		if (isIosSimulatorId(deviceId)) {
+			try {
+				return await captureIosSimulatorScreen(deviceId);
+			} catch (err) {
+				const message = err instanceof Error ? err.message : "Unknown screencap error";
+				throw new Error(`Failed to capture screen for iOS simulator ${deviceId}: ${message}`);
+			}
+		}
+
+		// Android device — use ADB
 		try {
-			const { stdout } = await execFile(
-				"adb",
-				["-s", deviceId, "exec-out", "screencap", "-p"],
-				{
-					timeout: ADB_TIMEOUT_MS,
-					maxBuffer: 50 * 1024 * 1024,
-					encoding: "buffer" as unknown as string,
-				},
-			);
+			const { stdout } = await execFile("adb", ["-s", deviceId, "exec-out", "screencap", "-p"], {
+				timeout: ADB_TIMEOUT_MS,
+				maxBuffer: 50 * 1024 * 1024,
+				encoding: "buffer" as unknown as string,
+			});
 			return stdout as unknown as Buffer;
 		} catch (err) {
-			const message =
-				err instanceof Error ? err.message : "Unknown screencap error";
-			throw new Error(
-				`Failed to capture screen for device ${deviceId}: ${message}`,
-			);
+			const message = err instanceof Error ? err.message : "Unknown screencap error";
+			throw new Error(`Failed to capture screen for device ${deviceId}: ${message}`);
 		}
 	}
 
 	async getElementTree(deviceId: string): Promise<MobileElement[]> {
-		// Attempt CDP / React DevTools first
+		// Attempt CDP / React DevTools first — works for both Android and iOS
+		// since Metro runs on the host and serves both platforms
 		const cdpElements = await this.getElementTreeViaCdp();
 		if (cdpElements.length > 0) {
 			return cdpElements;
 		}
 
-		// Fall back to UIAutomator if we have an ADB device
-		if (!deviceId.startsWith("metro-")) {
+		// Fall back to UIAutomator for Android ADB devices only.
+		// UIAutomator is not available for iOS simulators or Metro-only devices.
+		if (!deviceId.startsWith("metro-") && !isIosSimulatorId(deviceId)) {
 			return getUiAutomatorTree(deviceId);
 		}
 
 		return [];
 	}
 
-	async inspectElement(
-		deviceId: string,
-		x: number,
-		y: number,
-	): Promise<MobileElement | null> {
+	async inspectElement(deviceId: string, x: number, y: number): Promise<MobileElement | null> {
 		const tree = await this.getElementTree(deviceId);
 		return hitTestElement(tree, x, y);
 	}
@@ -610,9 +761,7 @@ export class ReactNativeBridge implements IPlatformBridge {
 				return [];
 			}
 
-			const parsed = JSON.parse(resultValue) as
-				| { error: string }
-				| { elements: RawFiberElement[] };
+			const parsed = JSON.parse(resultValue) as { error: string } | { elements: RawFiberElement[] };
 
 			if ("error" in parsed) {
 				return [];
@@ -681,11 +830,7 @@ function toMobileElement(raw: RawFiberElement): MobileElement {
 // Hit-testing: find smallest element whose bounding box contains (x, y)
 // ---------------------------------------------------------------------------
 
-function hitTestElement(
-	elements: MobileElement[],
-	x: number,
-	y: number,
-): MobileElement | null {
+function hitTestElement(elements: MobileElement[], x: number, y: number): MobileElement | null {
 	let best: MobileElement | null = null;
 	let bestArea = Number.POSITIVE_INFINITY;
 
@@ -693,8 +838,7 @@ function hitTestElement(
 		const bb = el.boundingBox;
 		if (bb.width <= 0 || bb.height <= 0) continue;
 
-		const inBounds =
-			x >= bb.x && x <= bb.x + bb.width && y >= bb.y && y <= bb.y + bb.height;
+		const inBounds = x >= bb.x && x <= bb.x + bb.width && y >= bb.y && y <= bb.y + bb.height;
 
 		if (inBounds) {
 			const area = bb.width * bb.height;

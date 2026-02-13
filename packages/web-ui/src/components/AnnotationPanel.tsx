@@ -1,5 +1,5 @@
-import { cn } from "../utils";
 import type { MobileAnnotation } from "../types";
+import { cn } from "../utils";
 
 interface AnnotationPanelProps {
 	annotations: MobileAnnotation[];
@@ -89,10 +89,7 @@ export function AnnotationPanel({
 		return (
 			<div className="flex flex-col gap-2 px-3 py-4">
 				{[1, 2, 3].map((n) => (
-					<div
-						key={n}
-						className="h-20 animate-pulse rounded-lg bg-neutral-800/50"
-					/>
+					<div key={n} className="h-20 animate-pulse rounded-lg bg-neutral-800/50" />
 				))}
 			</div>
 		);
@@ -131,8 +128,7 @@ export function AnnotationPanel({
 			resolved: 2,
 			dismissed: 3,
 		};
-		const statusDiff =
-			(statusOrder[a.status] ?? 4) - (statusOrder[b.status] ?? 4);
+		const statusDiff = (statusOrder[a.status] ?? 4) - (statusOrder[b.status] ?? 4);
 		if (statusDiff !== 0) return statusDiff;
 		return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
 	});
@@ -160,9 +156,7 @@ export function AnnotationPanel({
 						>
 							{intentIcon(annotation.intent)}
 						</span>
-						<p className="line-clamp-2 flex-1 text-sm text-neutral-200">
-							{annotation.comment}
-						</p>
+						<p className="line-clamp-2 flex-1 text-sm text-neutral-200">{annotation.comment}</p>
 					</div>
 
 					{/* Bottom row: status badge, severity, thread count, time */}
@@ -175,9 +169,7 @@ export function AnnotationPanel({
 						>
 							{annotation.status}
 						</span>
-						<span className="text-xs text-neutral-600">
-							{severityLabel(annotation.severity)}
-						</span>
+						<span className="text-xs text-neutral-600">{severityLabel(annotation.severity)}</span>
 						{annotation.thread.length > 0 && (
 							<span className="text-xs text-neutral-600">
 								{annotation.thread.length} msg{annotation.thread.length !== 1 ? "s" : ""}

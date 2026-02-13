@@ -6,11 +6,7 @@ interface UseSessionsResult {
 	sessions: Session[];
 	loading: boolean;
 	error: string | null;
-	createSession: (
-		name: string,
-		deviceId: string,
-		platform: string,
-	) => Promise<Session>;
+	createSession: (name: string, deviceId: string, platform: string) => Promise<Session>;
 	refresh: () => Promise<void>;
 }
 
@@ -29,9 +25,7 @@ export function useSessions(): UseSessionsResult {
 			}
 		} catch (err) {
 			if (mountedRef.current) {
-				setError(
-					err instanceof Error ? err.message : "Failed to fetch sessions",
-				);
+				setError(err instanceof Error ? err.message : "Failed to fetch sessions");
 			}
 		} finally {
 			if (mountedRef.current) {
@@ -49,11 +43,7 @@ export function useSessions(): UseSessionsResult {
 	}, [fetchSessions]);
 
 	const createSession = useCallback(
-		async (
-			name: string,
-			deviceId: string,
-			platform: string,
-		): Promise<Session> => {
+		async (name: string, deviceId: string, platform: string): Promise<Session> => {
 			const session = await apiFetch<Session>("/api/sessions", {
 				method: "POST",
 				body: JSON.stringify({ name, deviceId, platform }),

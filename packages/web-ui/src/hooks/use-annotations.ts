@@ -1,10 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { apiFetch, getEventsUrl } from "../api";
-import type {
-	CreateAnnotationPayload,
-	MobileAnnotation,
-	SessionWithAnnotations,
-} from "../types";
+import type { CreateAnnotationPayload, MobileAnnotation, SessionWithAnnotations } from "../types";
 
 interface UseAnnotationsResult {
 	annotations: MobileAnnotation[];
@@ -34,18 +30,14 @@ export function useAnnotations(sessionId: string | null): UseAnnotationsResult {
 
 		setLoading(true);
 		try {
-			const data = await apiFetch<SessionWithAnnotations>(
-				`/api/sessions/${sessionId}`,
-			);
+			const data = await apiFetch<SessionWithAnnotations>(`/api/sessions/${sessionId}`);
 			if (mountedRef.current) {
 				setAnnotations(data.annotations);
 				setError(null);
 			}
 		} catch (err) {
 			if (mountedRef.current) {
-				setError(
-					err instanceof Error ? err.message : "Failed to fetch annotations",
-				);
+				setError(err instanceof Error ? err.message : "Failed to fetch annotations");
 			}
 		} finally {
 			if (mountedRef.current) {
@@ -103,13 +95,10 @@ export function useAnnotations(sessionId: string | null): UseAnnotationsResult {
 
 	const createAnnotation = useCallback(
 		async (payload: CreateAnnotationPayload): Promise<MobileAnnotation> => {
-			const annotation = await apiFetch<MobileAnnotation>(
-				"/api/annotations",
-				{
-					method: "POST",
-					body: JSON.stringify(payload),
-				},
-			);
+			const annotation = await apiFetch<MobileAnnotation>("/api/annotations", {
+				method: "POST",
+				body: JSON.stringify(payload),
+			});
 			setAnnotations((prev) => [...prev, annotation]);
 			return annotation;
 		},
@@ -117,10 +106,7 @@ export function useAnnotations(sessionId: string | null): UseAnnotationsResult {
 	);
 
 	const reply = useCallback(
-		async (
-			annotationId: string,
-			content: string,
-		): Promise<MobileAnnotation> => {
+		async (annotationId: string, content: string): Promise<MobileAnnotation> => {
 			const annotation = await apiFetch<MobileAnnotation>(
 				`/api/annotations/${annotationId}/reply`,
 				{
@@ -128,9 +114,7 @@ export function useAnnotations(sessionId: string | null): UseAnnotationsResult {
 					body: JSON.stringify({ role: "human", content }),
 				},
 			);
-			setAnnotations((prev) =>
-				prev.map((a) => (a.id === annotation.id ? annotation : a)),
-			);
+			setAnnotations((prev) => prev.map((a) => (a.id === annotation.id ? annotation : a)));
 			return annotation;
 		},
 		[],
@@ -145,9 +129,7 @@ export function useAnnotations(sessionId: string | null): UseAnnotationsResult {
 				`/api/annotations/${annotationId}/${action}`,
 				{ method: "POST" },
 			);
-			setAnnotations((prev) =>
-				prev.map((a) => (a.id === annotation.id ? annotation : a)),
-			);
+			setAnnotations((prev) => prev.map((a) => (a.id === annotation.id ? annotation : a)));
 			return annotation;
 		},
 		[],

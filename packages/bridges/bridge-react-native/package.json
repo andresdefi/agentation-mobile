@@ -1,31 +1,31 @@
 {
-  "name": "@agentation-mobile/bridge-react-native",
-  "version": "0.1.0",
-  "private": true,
-  "type": "module",
-  "exports": {
-    ".": {
-      "import": "./dist/index.js",
-      "require": "./dist/index.cjs"
-    }
-  },
-  "main": "./dist/index.cjs",
-  "module": "./dist/index.js",
-  "types": "./dist/index.d.ts",
-  "files": ["dist"],
-  "scripts": {
-    "build": "tsup",
-    "dev": "tsup --watch",
-    "clean": "rm -rf dist"
-  },
-  "dependencies": {
-    "@agentation-mobile/core": "workspace:*",
-    "@agentation-mobile/bridge-core": "workspace:*",
-    "ws": "^8.18.0"
-  },
-  "devDependencies": {
-    "@types/node": "^22.10.5",
-    "@types/ws": "^8.5.13",
-    "tsup": "^8.3.5"
-  }
+	"name": "@agentation-mobile/bridge-react-native",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"exports": {
+		".": {
+			"import": "./dist/index.js",
+			"require": "./dist/index.cjs"
+		}
+	},
+	"main": "./dist/index.cjs",
+	"module": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"files": ["dist"],
+	"scripts": {
+		"build": "tsup",
+		"dev": "tsup --watch",
+		"clean": "rm -rf dist"
+	},
+	"dependencies": {
+		"@agentation-mobile/core": "workspace:*",
+		"@agentation-mobile/bridge-core": "workspace:*",
+		"ws": "^8.18.0"
+	},
+	"devDependencies": {
+		"@types/node": "^22.10.5",
+		"@types/ws": "^8.5.13",
+		"tsup": "^8.3.5"
+	}
 }

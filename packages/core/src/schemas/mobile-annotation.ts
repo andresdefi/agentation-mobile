@@ -1,9 +1,5 @@
 import { z } from "zod";
-import {
-	AnnotationIntentSchema,
-	AnnotationSeveritySchema,
-	AnnotationStatusSchema,
-} from "./enums";
+import { AnnotationIntentSchema, AnnotationSeveritySchema, AnnotationStatusSchema } from "./enums";
 import { MobileElementSchema } from "./mobile-element";
 
 export const ThreadMessageSchema = z.object({

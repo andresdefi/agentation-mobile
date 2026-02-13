@@ -1,6 +1,6 @@
 import { useState } from "react";
-import { cn } from "../utils";
 import type { MobileAnnotation } from "../types";
+import { cn } from "../utils";
 
 interface ThreadViewProps {
 	annotation: MobileAnnotation;
@@ -50,12 +50,7 @@ function intentColor(intent: string): string {
 	}
 }
 
-export function ThreadView({
-	annotation,
-	onReply,
-	onClose,
-	onUpdateStatus,
-}: ThreadViewProps) {
+export function ThreadView({ annotation, onReply, onClose, onUpdateStatus }: ThreadViewProps) {
 	const [replyText, setReplyText] = useState("");
 	const [sending, setSending] = useState(false);
 
@@ -81,12 +76,7 @@ export function ThreadView({
 						className="rounded-lg p-1 text-neutral-400 transition-colors hover:bg-neutral-800 hover:text-neutral-200"
 						aria-label="Close thread"
 					>
-						<svg
-							className="size-5"
-							fill="none"
-							stroke="currentColor"
-							viewBox="0 0 24 24"
-						>
+						<svg className="size-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
 							<path
 								strokeLinecap="round"
 								strokeLinejoin="round"
@@ -95,9 +85,7 @@ export function ThreadView({
 							/>
 						</svg>
 					</button>
-					<h3 className="text-balance text-sm font-semibold text-neutral-100">
-						Thread
-					</h3>
+					<h3 className="text-balance text-sm font-semibold text-neutral-100">Thread</h3>
 				</div>
 				<span
 					className={cn(
@@ -111,9 +99,7 @@ export function ThreadView({
 
 			{/* Annotation summary */}
 			<div className="border-b border-neutral-800 px-4 py-3">
-				<p className="text-pretty text-sm text-neutral-200">
-					{annotation.comment}
-				</p>
+				<p className="text-pretty text-sm text-neutral-200">{annotation.comment}</p>
 				<div className="mt-2 flex items-center gap-3 text-xs">
 					<span className={cn("font-medium capitalize", intentColor(annotation.intent))}>
 						{annotation.intent}
@@ -178,8 +164,7 @@ export function ThreadView({
 								<p className="text-pretty">{msg.content}</p>
 							</div>
 							<span className="px-1 text-xs text-neutral-600">
-								{msg.role === "human" ? "You" : "Agent"} --{" "}
-								{formatTime(msg.timestamp)}
+								{msg.role === "human" ? "You" : "Agent"} -- {formatTime(msg.timestamp)}
 							</span>
 						</div>
 					))}
@@ -187,10 +172,7 @@ export function ThreadView({
 			</div>
 
 			{/* Reply input */}
-			<form
-				onSubmit={handleSendReply}
-				className="flex gap-2 border-t border-neutral-800 px-4 py-3"
-			>
+			<form onSubmit={handleSendReply} className="flex gap-2 border-t border-neutral-800 px-4 py-3">
 				<input
 					type="text"
 					value={replyText}

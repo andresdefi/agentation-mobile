@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
+import type { AnnotationStatus } from "./schemas/enums";
 import type { MobileAnnotation } from "./schemas/mobile-annotation";
 import type { Session } from "./schemas/session";
-import type { AnnotationStatus } from "./schemas/enums";
 
 export interface CreateSessionInput {
 	name: string;

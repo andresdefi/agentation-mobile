@@ -1,27 +1,28 @@
 {
-  "name": "@agentation-mobile/cli",
-  "version": "0.1.0",
-  "private": true,
-  "type": "module",
-  "bin": {
-    "agentation-mobile": "./dist/index.js"
-  },
-  "files": ["dist"],
-  "scripts": {
-    "build": "tsup",
-    "dev": "tsup --watch",
-    "clean": "rm -rf dist"
-  },
-  "dependencies": {
-    "@agentation-mobile/core": "workspace:*",
-    "@agentation-mobile/bridge-android": "workspace:*",
-    "@agentation-mobile/bridge-react-native": "workspace:*",
-    "@agentation-mobile/server": "workspace:*",
-    "@agentation-mobile/mcp": "workspace:*",
-    "@modelcontextprotocol/sdk": "^1.4.0",
-    "commander": "^12.1.0"
-  },
-  "devDependencies": {
-    "tsup": "^8.3.5"
-  }
+	"name": "@agentation-mobile/cli",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"bin": {
+		"agentation-mobile": "./dist/index.js"
+	},
+	"files": ["dist"],
+	"scripts": {
+		"build": "tsup",
+		"dev": "tsup --watch",
+		"clean": "rm -rf dist"
+	},
+	"dependencies": {
+		"@agentation-mobile/core": "workspace:*",
+		"@agentation-mobile/bridge-android": "workspace:*",
+		"@agentation-mobile/bridge-react-native": "workspace:*",
+		"@agentation-mobile/bridge-ios": "workspace:*",
+		"@agentation-mobile/server": "workspace:*",
+		"@agentation-mobile/mcp": "workspace:*",
+		"@modelcontextprotocol/sdk": "^1.4.0",
+		"commander": "^12.1.0"
+	},
+	"devDependencies": {
+		"tsup": "^8.3.5"
+	}
 }

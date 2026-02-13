@@ -1,5 +1,5 @@
-import type { MobileElement } from "@agentation-mobile/core";
 import type { DeviceInfo, IPlatformBridge } from "@agentation-mobile/bridge-core";
+import type { MobileElement } from "@agentation-mobile/core";
 
 export class FlutterBridge implements IPlatformBridge {
 	readonly platform = "flutter" as const;
@@ -19,11 +19,7 @@ export class FlutterBridge implements IPlatformBridge {
 		return [];
 	}
 
-	async inspectElement(
-		_deviceId: string,
-		_x: number,
-		_y: number,
-	): Promise<MobileElement | null> {
+	async inspectElement(_deviceId: string, _x: number, _y: number): Promise<MobileElement | null> {
 		// TODO: Hit-test via ext.flutter.inspector.getWidgetForHitTest
 		return null;
 	}

@@ -1,11 +1,6 @@
 import { z } from "zod";
 
-export const PlatformSchema = z.enum([
-	"react-native",
-	"flutter",
-	"ios-native",
-	"android-native",
-]);
+export const PlatformSchema = z.enum(["react-native", "flutter", "ios-native", "android-native"]);
 export type Platform = z.infer<typeof PlatformSchema>;
 
 export const AnnotationIntentSchema = z.enum(["fix", "change", "question", "approve"]);

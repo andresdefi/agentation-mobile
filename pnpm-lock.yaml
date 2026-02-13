@@ -115,6 +115,9 @@ importers:
       '@agentation-mobile/bridge-android':
         specifier: workspace:*
         version: link:../bridges/bridge-android
+      '@agentation-mobile/bridge-ios':
+        specifier: workspace:*
+        version: link:../bridges/bridge-ios
       '@agentation-mobile/bridge-react-native':
         specifier: workspace:*
         version: link:../bridges/bridge-react-native

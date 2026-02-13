@@ -1,5 +1,5 @@
-import { Router } from "express";
 import type { IPlatformBridge } from "@agentation-mobile/bridge-core";
+import { Router } from "express";
 
 export function createDeviceRoutes(bridges: IPlatformBridge[]): Router {
 	const router = Router();

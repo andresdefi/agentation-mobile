@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState } from "react";
-import { cn } from "../utils";
 import type { MobileAnnotation } from "../types";
+import { cn } from "../utils";
 
 interface ScreenMirrorProps {
 	frameUrl: string | null;
@@ -117,9 +117,7 @@ export function ScreenMirror({
 		return (
 			<div className="flex flex-1 flex-col items-center justify-center gap-3">
 				<div className="size-6 animate-spin rounded-full border-2 border-neutral-700 border-t-neutral-400" />
-				<p className="text-pretty text-sm text-neutral-500">
-					Waiting for screen data...
-				</p>
+				<p className="text-pretty text-sm text-neutral-500">Waiting for screen data...</p>
 			</div>
 		);
 	}
@@ -131,15 +129,8 @@ export function ScreenMirror({
 		>
 			{/* Connection indicator */}
 			<div className="absolute left-4 top-4 z-10 flex items-center gap-1.5">
-				<span
-					className={cn(
-						"size-2 rounded-full",
-						connected ? "bg-green-500" : "bg-red-500",
-					)}
-				/>
-				<span className="text-xs text-neutral-500">
-					{connected ? "Live" : "Disconnected"}
-				</span>
+				<span className={cn("size-2 rounded-full", connected ? "bg-green-500" : "bg-red-500")} />
+				<span className="text-xs text-neutral-500">{connected ? "Live" : "Disconnected"}</span>
 			</div>
 
 			{/* Screen image with annotation overlay */}
@@ -147,10 +138,7 @@ export function ScreenMirror({
 				{frameUrl && (
 					<>
 						{/* Clickable overlay area exactly matching the image */}
-						<div
-							className="absolute inset-0 z-10 cursor-crosshair"
-							onClick={handleClick}
-						/>
+						<div className="absolute inset-0 z-10 cursor-crosshair" onClick={handleClick} />
 
 						<img
 							ref={imageRef}
@@ -186,9 +174,7 @@ export function ScreenMirror({
 								{/* Tooltip on hover */}
 								{hoveredPin === annotation.id && (
 									<div className="absolute bottom-full left-1/2 z-30 mb-2 w-48 -translate-x-1/2 rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-2 shadow-lg">
-										<p className="line-clamp-2 text-xs text-neutral-200">
-											{annotation.comment}
-										</p>
+										<p className="line-clamp-2 text-xs text-neutral-200">{annotation.comment}</p>
 										<div className="mt-1 flex items-center gap-2 text-xs text-neutral-500">
 											<span className="capitalize">{annotation.intent}</span>
 											<span>{annotation.severity}</span>

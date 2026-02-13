@@ -1,20 +1,22 @@
-import express, { type Express } from "express";
-import cors from "cors";
-import { createServer as createHttpServer, type Server as HttpServer } from "node:http";
-import { WebSocketServer, WebSocket } from "ws";
+import { type Server as HttpServer, createServer as createHttpServer } from "node:http";
+import type { DeviceInfo, IPlatformBridge } from "@agentation-mobile/bridge-core";
 import { Store } from "@agentation-mobile/core";
-import type { IPlatformBridge, DeviceInfo } from "@agentation-mobile/bridge-core";
-import { createSessionRoutes } from "./routes/sessions";
+import cors from "cors";
+import express, { type Express } from "express";
+import { WebSocket, WebSocketServer } from "ws";
+import { EventBus } from "./event-bus";
 import { createAnnotationRoutes } from "./routes/annotations";
 import { createDeviceRoutes } from "./routes/devices";
+import { createSessionRoutes } from "./routes/sessions";
 import { createSSERouter } from "./routes/sse";
-import { EventBus } from "./event-bus";
+import { type WebhookConfig, setupWebhooks } from "./webhooks";
 
 export interface ServerConfig {
 	port?: number;
 	host?: string;
 	bridges?: IPlatformBridge[];
 	staticDir?: string;
+	webhooks?: WebhookConfig[];
 }
 
 export interface Server {
@@ -26,12 +28,15 @@ export interface Server {
 }
 
 export function createServer(config: ServerConfig = {}): Server {
-	const { port = 4747, host = "localhost", bridges = [], staticDir } = config;
+	const { port = 4747, host = "localhost", bridges = [], staticDir, webhooks = [] } = config;
 
 	const app = express();
 	const httpServer = createHttpServer(app);
 	const store = new Store();
 	const eventBus = new EventBus();
+
+	// Webhooks
+	setupWebhooks(eventBus, webhooks);
 
 	app.use(cors());
 	app.use(express.json({ limit: "50mb" }));

@@ -1,7 +1,7 @@
 import { execFile as execFileCb } from "node:child_process";
 import { promisify } from "node:util";
-import type { MobileElement } from "@agentation-mobile/core";
 import type { DeviceInfo, IPlatformBridge } from "@agentation-mobile/bridge-core";
+import type { MobileElement } from "@agentation-mobile/core";
 import { XMLParser } from "fast-xml-parser";
 
 const execFile = promisify(execFileCb);
@@ -218,12 +218,7 @@ function pointInBounds(
 	y: number,
 	box: { x: number; y: number; width: number; height: number },
 ): boolean {
-	return (
-		x >= box.x &&
-		x <= box.x + box.width &&
-		y >= box.y &&
-		y <= box.y + box.height
-	);
+	return x >= box.x && x <= box.x + box.width && y >= box.y && y <= box.y + box.height;
 }
 
 export class AndroidBridge implements IPlatformBridge {
@@ -292,11 +287,9 @@ export class AndroidBridge implements IPlatformBridge {
 			let screenWidth = 0;
 			let screenHeight = 0;
 			try {
-				const { stdout: sizeOut } = await execFile(
-					"adb",
-					["-s", serial, "shell", "wm", "size"],
-					{ timeout: ADB_TIMEOUT },
-				);
+				const { stdout: sizeOut } = await execFile("adb", ["-s", serial, "shell", "wm", "size"], {
+					timeout: ADB_TIMEOUT,
+				});
 				// Output format: "Physical size: 1080x1920" or "Override size: 1080x1920"
 				// We prefer override size if present, otherwise physical size
 				const sizeLines = sizeOut.trim().split("\n");
@@ -331,30 +324,19 @@ export class AndroidBridge implements IPlatformBridge {
 	 * Uses `adb exec-out screencap -p` to stream raw PNG data directly.
 	 */
 	async captureScreen(deviceId: string): Promise<Buffer> {
-		const { stdout } = await execFile(
-			"adb",
-			["-s", deviceId, "exec-out", "screencap", "-p"],
-			{
-				timeout: ADB_TIMEOUT,
-				maxBuffer: ADB_MAX_BUFFER,
-				encoding: "buffer",
-			},
-		);
+		const { stdout } = await execFile("adb", ["-s", deviceId, "exec-out", "screencap", "-p"], {
+			timeout: ADB_TIMEOUT,
+			maxBuffer: ADB_MAX_BUFFER,
+			encoding: "buffer",
+		});
 
 		if (!stdout || stdout.length === 0) {
 			throw new Error(`Screenshot capture returned empty buffer for device ${deviceId}`);
 		}
 
 		// Validate it looks like a PNG (magic bytes: 0x89 P N G)
-		if (
-			stdout[0] !== 0x89 ||
-			stdout[1] !== 0x50 ||
-			stdout[2] !== 0x4e ||
-			stdout[3] !== 0x47
-		) {
-			throw new Error(
-				`Screenshot data does not appear to be a valid PNG for device ${deviceId}`,
-			);
+		if (stdout[0] !== 0x89 || stdout[1] !== 0x50 || stdout[2] !== 0x4e || stdout[3] !== 0x47) {
+			throw new Error(`Screenshot data does not appear to be a valid PNG for device ${deviceId}`);
 		}
 
 		return stdout;
@@ -394,11 +376,7 @@ export class AndroidBridge implements IPlatformBridge {
 	 * Gets the full element tree and finds the smallest element whose
 	 * bounding box contains the given point.
 	 */
-	async inspectElement(
-		deviceId: string,
-		x: number,
-		y: number,
-	): Promise<MobileElement | null> {
+	async inspectElement(deviceId: string, x: number, y: number): Promise<MobileElement | null> {
 		const elements = await this.getElementTree(deviceId);
 
 		let bestMatch: MobileElement | null = null;

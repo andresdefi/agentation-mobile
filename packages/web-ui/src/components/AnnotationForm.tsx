@@ -1,6 +1,6 @@
 import { useState } from "react";
-import { cn } from "../utils";
 import type { AnnotationIntent, AnnotationSeverity } from "../types";
+import { cn } from "../utils";
 
 interface AnnotationFormProps {
 	x: number;
@@ -27,13 +27,7 @@ const SEVERITIES: { value: AnnotationSeverity; label: string }[] = [
 	{ value: "suggestion", label: "Suggestion" },
 ];
 
-export function AnnotationForm({
-	x,
-	y,
-	onSubmit,
-	onCancel,
-	submitting,
-}: AnnotationFormProps) {
+export function AnnotationForm({ x, y, onSubmit, onCancel, submitting }: AnnotationFormProps) {
 	const [comment, setComment] = useState("");
 	const [intent, setIntent] = useState<AnnotationIntent>("fix");
 	const [severity, setSeverity] = useState<AnnotationSeverity>("important");
@@ -51,9 +45,7 @@ export function AnnotationForm({
 				className="w-full max-w-md rounded-xl border border-neutral-800 bg-neutral-900 p-6 shadow-lg"
 			>
 				<div className="mb-4 flex items-center justify-between">
-					<h3 className="text-balance text-lg font-semibold text-neutral-100">
-						New Annotation
-					</h3>
+					<h3 className="text-balance text-lg font-semibold text-neutral-100">New Annotation</h3>
 					<span className="rounded-md bg-neutral-800 px-2 py-0.5 font-mono text-xs tabular-nums text-neutral-400">
 						{x.toFixed(1)}%, {y.toFixed(1)}%
 					</span>

@@ -1,8 +1,8 @@
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { z } from "zod";
+import type { DeviceInfo, IPlatformBridge } from "@agentation-mobile/bridge-core";
 import type { Store } from "@agentation-mobile/core";
 import type { EventBus } from "@agentation-mobile/server";
-import type { IPlatformBridge, DeviceInfo } from "@agentation-mobile/bridge-core";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z } from "zod";
 
 interface McpServerDeps {
 	store: Store;

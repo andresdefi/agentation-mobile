@@ -1,5 +1,5 @@
 import { Router } from "express";
-import type { EventBus, BusEvent } from "../event-bus";
+import type { BusEvent, EventBus } from "../event-bus";
 
 export function createSSERouter(eventBus: EventBus): Router {
 	const router = Router();

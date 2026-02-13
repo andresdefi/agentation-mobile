@@ -1,20 +1,22 @@
-import { useCallback, useState } from "react";
-import { cn } from "./utils";
-import { useDevices } from "./hooks/use-devices";
-import { useAnnotations } from "./hooks/use-annotations";
-import { useScreenMirror } from "./hooks/use-screen-mirror";
-import { useSessions } from "./hooks/use-sessions";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { AnnotationFilters, type Filters } from "./components/AnnotationFilters";
+import { AnnotationForm } from "./components/AnnotationForm";
+import { AnnotationPanel } from "./components/AnnotationPanel";
 import { DeviceSelector } from "./components/DeviceSelector";
 import { ScreenMirror } from "./components/ScreenMirror";
-import { AnnotationPanel } from "./components/AnnotationPanel";
-import { AnnotationForm } from "./components/AnnotationForm";
 import { ThreadView } from "./components/ThreadView";
+import { useAnnotations } from "./hooks/use-annotations";
+import { useDevices } from "./hooks/use-devices";
+import { useScreenMirror } from "./hooks/use-screen-mirror";
+import { useSessions } from "./hooks/use-sessions";
 import type {
 	AnnotationIntent,
 	AnnotationSeverity,
+	AnnotationStatus,
 	DeviceInfo,
 	MobileAnnotation,
 } from "./types";
+import { cn } from "./utils";
 
 export function App() {
 	// Device state
@@ -35,21 +37,100 @@ export function App() {
 	} = useAnnotations(activeSessionId);
 
 	// Screen mirror
-	const {
-		frameUrl,
-		connected,
-		error: mirrorError,
-	} = useScreenMirror(selectedDevice?.id ?? null);
+	const { frameUrl, connected, error: mirrorError } = useScreenMirror(selectedDevice?.id ?? null);
 
 	// UI state
 	const [clickCoords, setClickCoords] = useState<{
 		x: number;
 		y: number;
 	} | null>(null);
-	const [selectedAnnotation, setSelectedAnnotation] =
-		useState<MobileAnnotation | null>(null);
+	const [selectedAnnotation, setSelectedAnnotation] = useState<MobileAnnotation | null>(null);
 	const [submittingAnnotation, setSubmittingAnnotation] = useState(false);
 	const [sidebarView, setSidebarView] = useState<"list" | "thread">("list");
+	const [filters, setFilters] = useState<Filters>({
+		status: null,
+		intent: null,
+		severity: null,
+	});
+
+	// Filtered annotations
+	const filteredAnnotations = useMemo(() => {
+		return annotations.filter((a) => {
+			if (filters.status && a.status !== filters.status) return false;
+			if (filters.intent && a.intent !== filters.intent) return false;
+			if (filters.severity && a.severity !== filters.severity) return false;
+			return true;
+		});
+	}, [annotations, filters]);
+
+	// Keyboard shortcuts
+	useEffect(() => {
+		const handler = (e: KeyboardEvent) => {
+			// Escape: close form, deselect annotation, or clear filters
+			if (e.key === "Escape") {
+				if (clickCoords) {
+					setClickCoords(null);
+				} else if (sidebarView === "thread") {
+					setSidebarView("list");
+					setSelectedAnnotation(null);
+				} else if (filters.status || filters.intent || filters.severity) {
+					setFilters({ status: null, intent: null, severity: null });
+				}
+				return;
+			}
+
+			// Don't intercept when typing in inputs
+			const target = e.target as HTMLElement;
+			if (
+				target.tagName === "INPUT" ||
+				target.tagName === "TEXTAREA" ||
+				target.tagName === "SELECT"
+			)
+				return;
+
+			// 1-4: filter by status
+			if (e.key === "1") {
+				setFilters((f) => ({
+					...f,
+					status: f.status === "pending" ? null : ("pending" as AnnotationStatus),
+				}));
+				return;
+			}
+			if (e.key === "2") {
+				setFilters((f) => ({
+					...f,
+					status: f.status === "acknowledged" ? null : ("acknowledged" as AnnotationStatus),
+				}));
+				return;
+			}
+			if (e.key === "3") {
+				setFilters((f) => ({
+					...f,
+					status: f.status === "resolved" ? null : ("resolved" as AnnotationStatus),
+				}));
+				return;
+			}
+			if (e.key === "4") {
+				setFilters((f) => ({
+					...f,
+					status: f.status === "dismissed" ? null : ("dismissed" as AnnotationStatus),
+				}));
+				return;
+			}
+
+			// r: refresh / go back to list
+			if (e.key === "r" && !e.metaKey && !e.ctrlKey) {
+				if (sidebarView === "thread") {
+					setSidebarView("list");
+					setSelectedAnnotation(null);
+				}
+				return;
+			}
+		};
+
+		window.addEventListener("keydown", handler);
+		return () => window.removeEventListener("keydown", handler);
+	}, [clickCoords, sidebarView, filters]);
 
 	// Handle device selection: auto-create or reuse session
 	const handleSelectDevice = useCallback(
@@ -59,18 +140,12 @@ export function App() {
 			setSidebarView("list");
 
 			// Look for existing session for this device
-			const existingSession = sessions.find(
-				(s) => s.deviceId === device.id,
-			);
+			const existingSession = sessions.find((s) => s.deviceId === device.id);
 
 			if (existingSession) {
 				setActiveSessionId(existingSession.id);
 			} else {
-				const session = await createSession(
-					`${device.name} session`,
-					device.id,
-					device.platform,
-				);
+				const session = await createSession(`${device.name} session`, device.id, device.platform);
 				setActiveSessionId(session.id);
 			}
 		},
@@ -118,13 +193,10 @@ export function App() {
 	);
 
 	// Handle selecting an annotation (from panel or pin)
-	const handleSelectAnnotation = useCallback(
-		(annotation: MobileAnnotation) => {
-			setSelectedAnnotation(annotation);
-			setSidebarView("thread");
-		},
-		[],
-	);
+	const handleSelectAnnotation = useCallback((annotation: MobileAnnotation) => {
+		setSelectedAnnotation(annotation);
+		setSidebarView("thread");
+	}, []);
 
 	// Handle reply
 	const handleReply = useCallback(
@@ -137,10 +209,7 @@ export function App() {
 
 	// Handle status update
 	const handleUpdateStatus = useCallback(
-		async (
-			annotationId: string,
-			action: "acknowledge" | "resolve" | "dismiss",
-		) => {
+		async (annotationId: string, action: "acknowledge" | "resolve" | "dismiss") => {
 			const updated = await updateStatus(annotationId, action);
 			setSelectedAnnotation(updated);
 		},
@@ -149,17 +218,14 @@ export function App() {
 
 	// Keep selectedAnnotation synced with live data
 	const liveSelectedAnnotation = selectedAnnotation
-		? annotations.find((a) => a.id === selectedAnnotation.id) ??
-			selectedAnnotation
+		? (annotations.find((a) => a.id === selectedAnnotation.id) ?? selectedAnnotation)
 		: null;
 
 	return (
 		<div className="flex h-dvh bg-neutral-950 text-neutral-100">
 			{/* Sidebar */}
 			<aside
-				className={cn(
-					"flex w-80 shrink-0 flex-col border-r border-neutral-800 bg-neutral-900",
-				)}
+				className={cn("flex w-80 shrink-0 flex-col border-r border-neutral-800 bg-neutral-900")}
 			>
 				{/* Sidebar header */}
 				<div className="flex flex-col gap-4 border-b border-neutral-800 px-4 py-4">
@@ -179,9 +245,7 @@ export function App() {
 								/>
 							</svg>
 						</div>
-						<h1 className="text-balance text-sm font-semibold tracking-tight">
-							agentation-mobile
-						</h1>
+						<h1 className="text-balance text-sm font-semibold tracking-tight">agentation-mobile</h1>
 					</div>
 
 					<DeviceSelector
@@ -203,13 +267,21 @@ export function App() {
 								</span>
 								{annotations.length > 0 && (
 									<span className="rounded-md bg-neutral-800 px-1.5 py-0.5 font-mono text-xs tabular-nums text-neutral-500">
-										{annotations.length}
+										{filteredAnnotations.length !== annotations.length
+											? `${filteredAnnotations.length}/${annotations.length}`
+											: annotations.length}
 									</span>
 								)}
 							</div>
+
+							{/* Filters */}
+							{annotations.length > 0 && (
+								<AnnotationFilters filters={filters} onFiltersChange={setFilters} />
+							)}
+
 							<div className="flex-1 overflow-y-auto">
 								<AnnotationPanel
-									annotations={annotations}
+									annotations={filteredAnnotations}
 									selectedAnnotationId={liveSelectedAnnotation?.id ?? null}
 									onSelectAnnotation={handleSelectAnnotation}
 									loading={annotationsLoading}
@@ -246,7 +318,7 @@ export function App() {
 					frameUrl={frameUrl}
 					connected={connected}
 					error={mirrorError}
-					annotations={annotations}
+					annotations={filteredAnnotations}
 					selectedAnnotationId={liveSelectedAnnotation?.id ?? null}
 					onClickScreen={handleScreenClick}
 					onSelectAnnotation={handleSelectAnnotation}

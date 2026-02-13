@@ -1,5 +1,5 @@
-import { Router } from "express";
 import type { Store } from "@agentation-mobile/core";
+import { Router } from "express";
 import type { EventBus } from "../event-bus";
 
 export function createAnnotationRoutes(store: Store, eventBus: EventBus): Router {
@@ -23,9 +23,18 @@ export function createAnnotationRoutes(store: Store, eventBus: EventBus): Router
 	// Create annotation
 	router.post("/", (req, res) => {
 		const {
-			sessionId, x, y, deviceId, platform,
-			screenWidth, screenHeight, screenshotId,
-			comment, intent, severity, element,
+			sessionId,
+			x,
+			y,
+			deviceId,
+			platform,
+			screenWidth,
+			screenHeight,
+			screenshotId,
+			comment,
+			intent,
+			severity,
+			element,
 		} = req.body;
 
 		if (!sessionId || x == null || y == null || !comment || !intent || !severity) {
@@ -43,7 +52,8 @@ export function createAnnotationRoutes(store: Store, eventBus: EventBus): Router
 
 		const annotation = store.createAnnotation({
 			sessionId,
-			x, y,
+			x,
+			y,
 			deviceId: deviceId || session.deviceId,
 			platform: platform || session.platform,
 			screenWidth: screenWidth || 0,

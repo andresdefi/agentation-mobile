@@ -1,5 +1,5 @@
-import { cn } from "../utils";
 import type { DeviceInfo } from "../types";
+import { cn } from "../utils";
 
 interface DeviceSelectorProps {
 	devices: DeviceInfo[];
@@ -48,9 +48,7 @@ export function DeviceSelector({
 					)}
 				>
 					{loading && <option value="">Loading devices...</option>}
-					{!loading && devices.length === 0 && (
-						<option value="">No devices found</option>
-					)}
+					{!loading && devices.length === 0 && <option value="">No devices found</option>}
 					{!loading && devices.length > 0 && !selectedDeviceId && (
 						<option value="">Select a device</option>
 					)}
@@ -69,12 +67,7 @@ export function DeviceSelector({
 						viewBox="0 0 24 24"
 						aria-hidden="true"
 					>
-						<path
-							strokeLinecap="round"
-							strokeLinejoin="round"
-							strokeWidth={2}
-							d="M19 9l-7 7-7-7"
-						/>
+						<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
 					</svg>
 				</div>
 			</div>
