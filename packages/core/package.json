@@ -5,10 +5,10 @@
 	"license": "MIT",
 	"repository": {
 		"type": "git",
-		"url": "https://github.com/andresdefi/agentation-mobile.git",
+		"url": "git+https://github.com/andresdefi/agentation-mobile.git",
 		"directory": "packages/core"
 	},
-	"keywords": ["agentation", "mobile", "annotation", "mcp", "ai-agent"],
+	"keywords": ["agentation", "mobile", "annotation", "mcp", "ai"],
 	"publishConfig": {
 		"access": "public"
 	},
@@ -30,7 +30,8 @@
 		"test": "vitest run --passWithNoTests"
 	},
 	"dependencies": {
-		"zod": "^3.24.1"
+		"zod": "^3.24.1",
+		"zod-to-json-schema": "^3.25.1"
 	},
 	"devDependencies": {
 		"@types/node": "^22.10.5",

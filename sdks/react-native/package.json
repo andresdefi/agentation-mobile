@@ -5,10 +5,10 @@
 	"license": "MIT",
 	"repository": {
 		"type": "git",
-		"url": "https://github.com/andresdefi/agentation-mobile.git",
+		"url": "git+https://github.com/andresdefi/agentation-mobile.git",
 		"directory": "sdks/react-native"
 	},
-	"keywords": ["agentation", "mobile", "react-native", "sdk", "dev-overlay"],
+	"keywords": ["agentation", "mobile", "annotation", "mcp", "ai"],
 	"publishConfig": {
 		"access": "public"
 	},
@@ -32,10 +32,12 @@
 		"@agentation-mobile/core": "workspace:*"
 	},
 	"peerDependencies": {
+		"@react-native-async-storage/async-storage": ">=1.19",
 		"react": ">=18",
 		"react-native": ">=0.72"
 	},
 	"devDependencies": {
+		"@react-native-async-storage/async-storage": "^2.2.0",
 		"@types/react": "^19.0.2",
 		"tsup": "^8.3.5"
 	}

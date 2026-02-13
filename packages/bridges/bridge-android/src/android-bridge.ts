@@ -438,6 +438,53 @@ export class AndroidBridge implements IPlatformBridge {
 		}
 	}
 
+	async pauseAnimations(deviceId: string): Promise<{ success: boolean; message: string }> {
+		try {
+			// Set all three animation scale settings to 0
+			await execFile(
+				"adb",
+				["-s", deviceId, "shell", "settings", "put", "global", "animator_duration_scale", "0"],
+				{ timeout: ADB_TIMEOUT },
+			);
+			await execFile(
+				"adb",
+				["-s", deviceId, "shell", "settings", "put", "global", "transition_animation_scale", "0"],
+				{ timeout: ADB_TIMEOUT },
+			);
+			await execFile(
+				"adb",
+				["-s", deviceId, "shell", "settings", "put", "global", "window_animation_scale", "0"],
+				{ timeout: ADB_TIMEOUT },
+			);
+			return { success: true, message: "All animations disabled" };
+		} catch (err) {
+			return { success: false, message: `${err}` };
+		}
+	}
+
+	async resumeAnimations(deviceId: string): Promise<{ success: boolean; message: string }> {
+		try {
+			await execFile(
+				"adb",
+				["-s", deviceId, "shell", "settings", "put", "global", "animator_duration_scale", "1"],
+				{ timeout: ADB_TIMEOUT },
+			);
+			await execFile(
+				"adb",
+				["-s", deviceId, "shell", "settings", "put", "global", "transition_animation_scale", "1"],
+				{ timeout: ADB_TIMEOUT },
+			);
+			await execFile(
+				"adb",
+				["-s", deviceId, "shell", "settings", "put", "global", "window_animation_scale", "1"],
+				{ timeout: ADB_TIMEOUT },
+			);
+			return { success: true, message: "All animations restored to normal" };
+		} catch (err) {
+			return { success: false, message: `${err}` };
+		}
+	}
+
 	/**
 	 * Parse the UIAutomator XML dump into a flat list of MobileElement objects.
 	 */

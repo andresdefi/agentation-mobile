@@ -50,6 +50,13 @@ export interface MobileElement {
 	nearbyText?: string;
 }
 
+export interface SelectedArea {
+	x: number;
+	y: number;
+	width: number;
+	height: number;
+}
+
 export interface MobileAnnotation {
 	id: string;
 	sessionId: string;
@@ -66,6 +73,8 @@ export interface MobileAnnotation {
 	severity: AnnotationSeverity;
 	status: AnnotationStatus;
 	element?: MobileElement;
+	selectedArea?: SelectedArea;
+	selectedText?: string;
 	thread: ThreadMessage[];
 	createdAt: string;
 	updatedAt: string;
@@ -95,4 +104,7 @@ export interface CreateAnnotationPayload {
 	comment: string;
 	intent: AnnotationIntent;
 	severity: AnnotationSeverity;
+	element?: MobileElement;
+	selectedArea?: SelectedArea;
+	selectedText?: string;
 }

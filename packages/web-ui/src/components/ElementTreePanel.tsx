@@ -6,8 +6,8 @@ interface ElementTreePanelProps {
 	elements: MobileElement[];
 	loading: boolean;
 	error: string | null;
-	selectedElementId: string | null;
-	onSelectElement: (element: MobileElement) => void;
+	selectedElementIds: Set<string>;
+	onSelectElement: (element: MobileElement, multiSelect: boolean) => void;
 	onRefresh: () => void;
 }
 
@@ -28,25 +28,25 @@ function TreeNode({
 	element,
 	tree,
 	depth,
-	selectedElementId,
+	selectedElementIds,
 	onSelectElement,
 }: {
 	element: MobileElement;
 	tree: Map<string, MobileElement[]>;
 	depth: number;
-	selectedElementId: string | null;
-	onSelectElement: (el: MobileElement) => void;
+	selectedElementIds: Set<string>;
+	onSelectElement: (el: MobileElement, multiSelect: boolean) => void;
 }) {
 	const [expanded, setExpanded] = useState(depth < 2);
 	const children = tree.get(element.componentPath) ?? [];
 	const hasChildren = children.length > 0;
-	const isSelected = selectedElementId === element.id;
+	const isSelected = element.id ? selectedElementIds.has(element.id) : false;
 
 	return (
 		<div>
 			<button
 				type="button"
-				onClick={() => onSelectElement(element)}
+				onClick={(e) => onSelectElement(element, e.shiftKey)}
 				className={cn(
 					"flex w-full items-center gap-1 rounded px-1.5 py-1 text-left text-xs transition-colors hover:bg-neutral-800",
 					isSelected && "bg-neutral-800 ring-1 ring-neutral-600",
@@ -94,7 +94,7 @@ function TreeNode({
 						element={child}
 						tree={tree}
 						depth={depth + 1}
-						selectedElementId={selectedElementId}
+						selectedElementIds={selectedElementIds}
 						onSelectElement={onSelectElement}
 					/>
 				))}
@@ -164,12 +164,14 @@ export function ElementTreePanel({
 	elements,
 	loading,
 	error,
-	selectedElementId,
+	selectedElementIds,
 	onSelectElement,
 	onRefresh,
 }: ElementTreePanelProps) {
 	const tree = buildTree(elements);
-	const selectedElement = elements.find((el) => el.id === selectedElementId) ?? null;
+	const selectedElements = elements.filter((el) => el.id && selectedElementIds.has(el.id));
+	const lastSelected =
+		selectedElements.length > 0 ? selectedElements[selectedElements.length - 1] : null;
 
 	// Root elements: those without a parent in the tree
 	const rootElements = elements.filter((el) => {
@@ -227,6 +229,11 @@ export function ElementTreePanel({
 					Elements
 				</span>
 				<div className="flex items-center gap-2">
+					{selectedElements.length > 1 && (
+						<span className="rounded-md bg-blue-900/50 px-1.5 py-0.5 font-mono text-xs tabular-nums text-blue-400">
+							{selectedElements.length} selected
+						</span>
+					)}
 					<span className="rounded-md bg-neutral-800 px-1.5 py-0.5 font-mono text-xs tabular-nums text-neutral-500">
 						{elements.length}
 					</span>
@@ -256,14 +263,14 @@ export function ElementTreePanel({
 						element={el}
 						tree={tree}
 						depth={0}
-						selectedElementId={selectedElementId}
+						selectedElementIds={selectedElementIds}
 						onSelectElement={onSelectElement}
 					/>
 				))}
 			</div>
 
 			{/* Selected element detail */}
-			{selectedElement && <ElementDetail element={selectedElement} />}
+			{lastSelected && <ElementDetail element={lastSelected} />}
 		</div>
 	);
 }

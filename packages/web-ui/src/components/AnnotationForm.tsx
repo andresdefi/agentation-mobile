@@ -1,10 +1,14 @@
 import { useState } from "react";
-import type { AnnotationIntent, AnnotationSeverity } from "../types";
+import type { AnnotationIntent, AnnotationSeverity, MobileElement, SelectedArea } from "../types";
 import { cn } from "../utils";
 
 interface AnnotationFormProps {
 	x: number;
 	y: number;
+	element?: MobileElement | null;
+	inspectingElement?: boolean;
+	selectedArea?: SelectedArea;
+	selectedText?: string;
 	onSubmit: (data: {
 		comment: string;
 		intent: AnnotationIntent;
@@ -27,7 +31,17 @@ const SEVERITIES: { value: AnnotationSeverity; label: string }[] = [
 	{ value: "suggestion", label: "Suggestion" },
 ];
 
-export function AnnotationForm({ x, y, onSubmit, onCancel, submitting }: AnnotationFormProps) {
+export function AnnotationForm({
+	x,
+	y,
+	element,
+	inspectingElement,
+	selectedArea,
+	selectedText,
+	onSubmit,
+	onCancel,
+	submitting,
+}: AnnotationFormProps) {
 	const [comment, setComment] = useState("");
 	const [intent, setIntent] = useState<AnnotationIntent>("fix");
 	const [severity, setSeverity] = useState<AnnotationSeverity>("important");
@@ -46,10 +60,52 @@ export function AnnotationForm({ x, y, onSubmit, onCancel, submitting }: Annotat
 			>
 				<div className="mb-4 flex items-center justify-between">
 					<h3 className="text-balance text-lg font-semibold text-neutral-100">New Annotation</h3>
-					<span className="rounded-md bg-neutral-800 px-2 py-0.5 font-mono text-xs tabular-nums text-neutral-400">
-						{x.toFixed(1)}%, {y.toFixed(1)}%
-					</span>
+					<div className="flex flex-col items-end gap-0.5">
+						<span className="rounded-md bg-neutral-800 px-2 py-0.5 font-mono text-xs tabular-nums text-neutral-400">
+							{x.toFixed(1)}%, {y.toFixed(1)}%
+						</span>
+						{selectedArea && (
+							<span className="rounded-md bg-blue-900/50 px-2 py-0.5 font-mono text-xs tabular-nums text-blue-400">
+								{selectedArea.width.toFixed(0)}% x {selectedArea.height.toFixed(0)}% area
+							</span>
+						)}
+					</div>
 				</div>
+
+				{/* Selected text */}
+				{selectedArea == null && selectedText && (
+					<div className="mb-4 rounded-lg border border-amber-800/50 bg-amber-950/30 px-3 py-2">
+						<span className="text-xs font-medium text-amber-400">Selected text:</span>
+						<p className="mt-0.5 text-pretty text-sm text-neutral-200">
+							&ldquo;{selectedText}&rdquo;
+						</p>
+					</div>
+				)}
+
+				{/* Element context */}
+				{inspectingElement && (
+					<div className="mb-4 flex items-center gap-2 rounded-lg border border-neutral-800 bg-neutral-950 px-3 py-2">
+						<div className="size-3 animate-spin rounded-full border border-neutral-700 border-t-neutral-400" />
+						<span className="text-xs text-neutral-500">Inspecting element...</span>
+					</div>
+				)}
+				{!inspectingElement && element && (
+					<div className="mb-4 rounded-lg border border-neutral-800 bg-neutral-950 px-3 py-2">
+						<div className="flex items-center gap-2">
+							<span className="text-xs font-medium text-neutral-400">{element.componentName}</span>
+							{element.componentFile && (
+								<span className="truncate font-mono text-xs text-neutral-600">
+									{element.componentFile}
+								</span>
+							)}
+						</div>
+						{element.componentPath && (
+							<p className="mt-0.5 truncate font-mono text-xs text-neutral-600">
+								{element.componentPath}
+							</p>
+						)}
+					</div>
+				)}
 
 				<div className="flex flex-col gap-4">
 					{/* Comment */}

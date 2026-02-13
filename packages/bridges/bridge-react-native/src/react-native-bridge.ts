@@ -725,6 +725,112 @@ export class ReactNativeBridge implements IPlatformBridge {
 		return hitTestElement(tree, x, y);
 	}
 
+	async pauseAnimations(deviceId: string): Promise<{ success: boolean; message: string }> {
+		if (deviceId.startsWith("metro-")) {
+			return {
+				success: false,
+				message: "Cannot control animations on Metro-only virtual device",
+			};
+		}
+
+		try {
+			if (isIosSimulatorId(deviceId)) {
+				// iOS Simulator: set UIAnimationDragCoefficient to freeze animations
+				await execFile(
+					"xcrun",
+					[
+						"simctl",
+						"spawn",
+						deviceId,
+						"defaults",
+						"write",
+						"com.apple.UIKit",
+						"UIAnimationDragCoefficient",
+						"-float",
+						"999",
+					],
+					{ timeout: ADB_TIMEOUT_MS },
+				);
+				return {
+					success: true,
+					message: "Animations paused on iOS simulator",
+				};
+			}
+
+			// Android: disable all animation scales via ADB
+			await execFile(
+				"adb",
+				["-s", deviceId, "shell", "settings", "put", "global", "animator_duration_scale", "0"],
+				{ timeout: ADB_TIMEOUT_MS },
+			);
+			await execFile(
+				"adb",
+				["-s", deviceId, "shell", "settings", "put", "global", "transition_animation_scale", "0"],
+				{ timeout: ADB_TIMEOUT_MS },
+			);
+			await execFile(
+				"adb",
+				["-s", deviceId, "shell", "settings", "put", "global", "window_animation_scale", "0"],
+				{ timeout: ADB_TIMEOUT_MS },
+			);
+			return { success: true, message: "All animations disabled on Android device" };
+		} catch (err) {
+			return { success: false, message: `${err}` };
+		}
+	}
+
+	async resumeAnimations(deviceId: string): Promise<{ success: boolean; message: string }> {
+		if (deviceId.startsWith("metro-")) {
+			return {
+				success: false,
+				message: "Cannot control animations on Metro-only virtual device",
+			};
+		}
+
+		try {
+			if (isIosSimulatorId(deviceId)) {
+				await execFile(
+					"xcrun",
+					[
+						"simctl",
+						"spawn",
+						deviceId,
+						"defaults",
+						"write",
+						"com.apple.UIKit",
+						"UIAnimationDragCoefficient",
+						"-float",
+						"1",
+					],
+					{ timeout: ADB_TIMEOUT_MS },
+				);
+				return {
+					success: true,
+					message: "Animations restored on iOS simulator",
+				};
+			}
+
+			await execFile(
+				"adb",
+				["-s", deviceId, "shell", "settings", "put", "global", "animator_duration_scale", "1"],
+				{ timeout: ADB_TIMEOUT_MS },
+			);
+			await execFile(
+				"adb",
+				["-s", deviceId, "shell", "settings", "put", "global", "transition_animation_scale", "1"],
+				{ timeout: ADB_TIMEOUT_MS },
+			);
+			await execFile(
+				"adb",
+				["-s", deviceId, "shell", "settings", "put", "global", "window_animation_scale", "1"],
+				{ timeout: ADB_TIMEOUT_MS },
+			);
+			return { success: true, message: "All animations restored on Android device" };
+		} catch (err) {
+			return { success: false, message: `${err}` };
+		}
+	}
+
 	// -----------------------------------------------------------------------
 	// Private: CDP element tree retrieval
 	// -----------------------------------------------------------------------

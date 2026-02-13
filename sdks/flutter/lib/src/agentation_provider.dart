@@ -4,12 +4,16 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:agentation_mobile/src/models.dart';
+
+const _storageKey = 'agentation_mobile_annotations';
 
 /// Configuration for the agentation-mobile connection.
 class AgentationConfig {
-  /// Server URL, e.g. "http://192.168.1.5:4747"
-  final String serverUrl;
+  /// Server URL, e.g. "http://192.168.1.5:4747".
+  /// If null, runs in local-only mode (annotations stored on device).
+  final String? serverUrl;
 
   /// Device ID for this device
   final String? deviceId;
@@ -21,7 +25,7 @@ class AgentationConfig {
   final bool enabled;
 
   const AgentationConfig({
-    required this.serverUrl,
+    this.serverUrl,
     this.deviceId,
     this.sessionId,
     bool? enabled,
@@ -32,6 +36,15 @@ class AgentationConfig {
 ///
 /// Place this above [AgentationOverlay] in the widget tree.
 ///
+/// Local mode (no server needed):
+/// ```dart
+/// AgentationProvider(
+///   config: AgentationConfig(),
+///   child: AgentationOverlay(child: MyApp()),
+/// )
+/// ```
+///
+/// Server mode:
 /// ```dart
 /// AgentationProvider(
 ///   config: AgentationConfig(serverUrl: 'http://localhost:4747'),
@@ -66,18 +79,53 @@ class AgentationState extends State<AgentationProvider> {
   List<MobileAnnotation> _annotations = [];
   bool _connected = false;
   Timer? _pollTimer;
-  final HttpClient _httpClient = HttpClient();
+  HttpClient? _httpClient;
+  SharedPreferences? _prefs;
 
   List<MobileAnnotation> get annotations => _annotations;
-  bool get connected => _connected;
+  bool get connected => localMode ? true : _connected;
+  bool get localMode => widget.config.serverUrl == null;
   AgentationConfig get config => widget.config;
 
   @override
   void initState() {
     super.initState();
     if (widget.config.enabled) {
+      _initialize();
+    }
+  }
+
+  Future<void> _initialize() async {
+    // Load from local storage first
+    _prefs = await SharedPreferences.getInstance();
+    _loadFromStorage();
+
+    // If server mode, start polling
+    if (!localMode) {
+      _httpClient = HttpClient();
       _startPolling();
     }
+  }
+
+  void _loadFromStorage() {
+    final stored = _prefs?.getString(_storageKey);
+    if (stored != null && mounted) {
+      try {
+        final list = jsonDecode(stored) as List<dynamic>;
+        setState(() {
+          _annotations = list
+              .map((j) => MobileAnnotation.fromJson(j as Map<String, dynamic>))
+              .toList();
+        });
+      } catch (_) {
+        // Ignore corrupted storage
+      }
+    }
+  }
+
+  void _saveToStorage() {
+    final data = jsonEncode(_annotations.map((a) => a.toJson()).toList());
+    _prefs?.setString(_storageKey, data);
   }
 
   @override
@@ -86,7 +134,8 @@ class AgentationState extends State<AgentationProvider> {
     if (oldWidget.config.serverUrl != widget.config.serverUrl ||
         oldWidget.config.sessionId != widget.config.sessionId) {
       _stopPolling();
-      if (widget.config.enabled) {
+      if (widget.config.enabled && !localMode) {
+        _httpClient ??= HttpClient();
         _startPolling();
       }
     }
@@ -95,7 +144,7 @@ class AgentationState extends State<AgentationProvider> {
   @override
   void dispose() {
     _stopPolling();
-    _httpClient.close();
+    _httpClient?.close();
     super.dispose();
   }
 
@@ -113,12 +162,12 @@ class AgentationState extends State<AgentationProvider> {
   }
 
   Future<void> _fetchAnnotations() async {
-    if (widget.config.sessionId == null) return;
+    if (widget.config.sessionId == null || _httpClient == null) return;
     try {
       final uri = Uri.parse(
         '${widget.config.serverUrl}/api/annotations?sessionId=${widget.config.sessionId}',
       );
-      final request = await _httpClient.getUrl(uri);
+      final request = await _httpClient!.getUrl(uri);
       final response = await request.close();
       if (response.statusCode == 200) {
         final body = await response.transform(utf8.decoder).join();
@@ -130,6 +179,7 @@ class AgentationState extends State<AgentationProvider> {
                 .toList();
             _connected = true;
           });
+          _saveToStorage();
         }
       }
     } catch (_) {
@@ -139,7 +189,7 @@ class AgentationState extends State<AgentationProvider> {
     }
   }
 
-  /// Create a new annotation on the server.
+  /// Create a new annotation. Works in both local and server mode.
   Future<void> createAnnotation({
     required double x,
     required double y,
@@ -147,28 +197,79 @@ class AgentationState extends State<AgentationProvider> {
     AnnotationIntent intent = AnnotationIntent.fix,
     AnnotationSeverity severity = AnnotationSeverity.important,
   }) async {
-    if (widget.config.sessionId == null) return;
-    try {
-      final uri = Uri.parse('${widget.config.serverUrl}/api/annotations');
-      final request = await _httpClient.postUrl(uri);
-      request.headers.set('Content-Type', 'application/json');
-      request.write(jsonEncode({
-        'sessionId': widget.config.sessionId,
-        'x': x,
-        'y': y,
-        'deviceId': widget.config.deviceId ?? 'flutter-device',
-        'platform': 'flutter',
-        'screenWidth': 0,
-        'screenHeight': 0,
-        'comment': comment,
-        'intent': intent.name,
-        'severity': severity.name,
-      }));
-      await request.close();
-      await _fetchAnnotations();
-    } catch (_) {
-      // Silently fail — dev tool
+    if (localMode) {
+      // Local-only mode: create annotation locally
+      final now = DateTime.now().toUtc().toIso8601String();
+      final annotation = MobileAnnotation(
+        id: '${DateTime.now().millisecondsSinceEpoch}-${(DateTime.now().microsecond).toRadixString(36)}',
+        sessionId: widget.config.sessionId ?? 'local',
+        x: x,
+        y: y,
+        deviceId: widget.config.deviceId ?? 'flutter-device',
+        platform: 'flutter',
+        screenWidth: 0,
+        screenHeight: 0,
+        comment: comment,
+        intent: intent,
+        severity: severity,
+        status: AnnotationStatus.pending,
+        thread: [],
+        createdAt: now,
+        updatedAt: now,
+      );
+      if (mounted) {
+        setState(() => _annotations = [..._annotations, annotation]);
+        _saveToStorage();
+      }
+    } else {
+      // Server mode: POST to server
+      if (widget.config.sessionId == null || _httpClient == null) return;
+      try {
+        final uri = Uri.parse('${widget.config.serverUrl}/api/annotations');
+        final request = await _httpClient!.postUrl(uri);
+        request.headers.set('Content-Type', 'application/json');
+        request.write(jsonEncode({
+          'sessionId': widget.config.sessionId,
+          'x': x,
+          'y': y,
+          'deviceId': widget.config.deviceId ?? 'flutter-device',
+          'platform': 'flutter',
+          'screenWidth': 0,
+          'screenHeight': 0,
+          'comment': comment,
+          'intent': intent.name,
+          'severity': severity.name,
+        }));
+        await request.close();
+        await _fetchAnnotations();
+      } catch (_) {
+        // Silently fail — dev tool
+      }
     }
+  }
+
+  /// Export all annotations as structured text for pasting into AI tools.
+  String exportAnnotations() {
+    final lines = <String>[];
+    lines.add('# ${_annotations.length} annotations');
+    lines.add('');
+
+    for (var i = 0; i < _annotations.length; i++) {
+      final a = _annotations[i];
+      var ref = '${i + 1}. [${a.intent.name}/${a.severity.name}]';
+      if (a.element?.componentName != null) {
+        ref += ' ${a.element!.componentName}';
+        if (a.element!.componentFile != null) {
+          ref += ' (${a.element!.componentFile})';
+        }
+      }
+      lines.add(ref);
+      lines.add('   ${a.comment}');
+      lines.add('   Status: ${a.status.name} | Position: ${a.x.toStringAsFixed(1)}%, ${a.y.toStringAsFixed(1)}%');
+      lines.add('');
+    }
+
+    return lines.join('\n').trimRight();
   }
 
   @override

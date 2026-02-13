@@ -1,4 +1,6 @@
+import { existsSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { createServer } from "@agentation-mobile/server";
 import { Command } from "commander";
 
@@ -374,7 +376,100 @@ program
 		}
 	});
 
+program
+	.command("init")
+	.description("Set up agentation-mobile SDK in your project")
+	.action(async () => {
+		const cwd = process.cwd();
+		const framework = detectFramework(cwd);
+
+		if (!framework) {
+			console.log(
+				"Could not detect framework. Make sure you are in a React Native or Flutter project.",
+			);
+			console.log("");
+			console.log("Manual setup:");
+			console.log("  React Native: npm install @agentation-mobile/react-native-sdk");
+			console.log("  Flutter:      flutter pub add agentation_mobile --dev");
+			process.exit(1);
+		}
+
+		if (framework === "react-native") {
+			console.log("Detected: React Native");
+			console.log("");
+			console.log("1. Install the SDK:");
+			console.log("   npm install @agentation-mobile/react-native-sdk");
+			console.log("");
+			console.log("2. Wrap your app with the provider (e.g. in App.tsx):");
+			console.log("");
+			console.log(
+				'   import { AgentationProvider, AgentationOverlay } from "@agentation-mobile/react-native-sdk";',
+			);
+			console.log("");
+			console.log("   export default function App() {");
+			console.log("     return (");
+			console.log("       <AgentationProvider>");
+			console.log("         {/* your app */}");
+			console.log("         <AgentationOverlay />");
+			console.log("       </AgentationProvider>");
+			console.log("     );");
+			console.log("   }");
+			console.log("");
+			console.log("3. Start the server in a separate terminal:");
+			console.log("   npx agentation-mobile start");
+			console.log("");
+			console.log(
+				"The overlay will appear in dev builds. It auto-connects to the server at localhost:4747.",
+			);
+		} else {
+			console.log("Detected: Flutter");
+			console.log("");
+			console.log("1. Add the SDK to pubspec.yaml:");
+			console.log("   flutter pub add agentation_mobile --dev");
+			console.log("");
+			console.log("2. Add the overlay to your app (e.g. in main.dart):");
+			console.log("");
+			console.log("   import 'package:agentation_mobile/agentation_mobile.dart';");
+			console.log("");
+			console.log("   @override");
+			console.log("   Widget build(BuildContext context) {");
+			console.log("     return AgentationOverlay(");
+			console.log("       child: MaterialApp(/* ... */),");
+			console.log("     );");
+			console.log("   }");
+			console.log("");
+			console.log("3. Start the server in a separate terminal:");
+			console.log("   npx agentation-mobile start");
+			console.log("");
+			console.log(
+				"The overlay will appear in debug builds. It auto-connects to the server at localhost:4747.",
+			);
+		}
+	});
+
 program.parse();
+
+function detectFramework(cwd: string): "react-native" | "flutter" | null {
+	// Check for React Native
+	const rnPackageJson = join(cwd, "package.json");
+	if (existsSync(rnPackageJson)) {
+		try {
+			const pkg = JSON.parse(require("node:fs").readFileSync(rnPackageJson, "utf-8")) as Record<
+				string,
+				Record<string, string> | undefined
+			>;
+			const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+			if (deps["react-native"]) return "react-native";
+		} catch {
+			// not parseable
+		}
+	}
+
+	// Check for Flutter
+	if (existsSync(join(cwd, "pubspec.yaml"))) return "flutter";
+
+	return null;
+}
 
 async function loadBridges() {
 	const bridges = [];

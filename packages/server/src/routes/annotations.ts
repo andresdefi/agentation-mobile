@@ -35,6 +35,8 @@ export function createAnnotationRoutes(store: Store, eventBus: EventBus): Router
 			intent,
 			severity,
 			element,
+			selectedArea,
+			selectedText,
 		} = req.body;
 
 		if (!sessionId || x == null || y == null || !comment || !intent || !severity) {
@@ -63,6 +65,8 @@ export function createAnnotationRoutes(store: Store, eventBus: EventBus): Router
 			intent,
 			severity,
 			element,
+			selectedArea,
+			selectedText,
 		});
 
 		eventBus.emit("annotation:created", annotation);

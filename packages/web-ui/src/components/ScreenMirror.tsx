@@ -1,6 +1,10 @@
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { useCallback, useRef, useState } from "react";
-import type { MobileAnnotation } from "../types";
+import type { TextRegion } from "../hooks/use-ocr";
+import type { MobileAnnotation, SelectedArea } from "../types";
 import { cn } from "../utils";
+
+export type InteractionMode = "point" | "area" | "text";
 
 interface ScreenMirrorProps {
 	frameUrl: string | null;
@@ -8,7 +12,13 @@ interface ScreenMirrorProps {
 	error: string | null;
 	annotations: MobileAnnotation[];
 	selectedAnnotationId: string | null;
+	recentlyResolved?: Set<string>;
+	interactionMode: InteractionMode;
+	textRegions?: TextRegion[];
+	ocrLoading?: boolean;
 	onClickScreen: (x: number, y: number) => void;
+	onAreaSelect: (area: SelectedArea) => void;
+	onTextSelect: (region: TextRegion) => void;
 	onSelectAnnotation: (annotation: MobileAnnotation) => void;
 }
 
@@ -27,40 +37,180 @@ function pinColor(status: string): string {
 	}
 }
 
+function ResolvedPin({
+	annotation,
+	index,
+	isSelected,
+	onSelect,
+}: {
+	annotation: MobileAnnotation;
+	index: number;
+	isSelected: boolean;
+	onSelect: () => void;
+}) {
+	const prefersReducedMotion = useReducedMotion();
+
+	if (prefersReducedMotion) {
+		return (
+			<button
+				type="button"
+				onClick={(e) => {
+					e.stopPropagation();
+					onSelect();
+				}}
+				className={cn(
+					"absolute z-20 flex size-6 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border-2 text-xs font-bold text-white shadow-md",
+					"bg-green-500 border-green-300",
+					isSelected && "scale-125 ring-2 ring-white/30",
+				)}
+				style={{
+					left: `${annotation.x}%`,
+					top: `${annotation.y}%`,
+				}}
+				aria-label={`Resolved: ${annotation.comment}`}
+			>
+				<svg className="size-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+					<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+				</svg>
+			</button>
+		);
+	}
+
+	return (
+		<motion.button
+			type="button"
+			onClick={(e) => {
+				e.stopPropagation();
+				onSelect();
+			}}
+			className={cn(
+				"absolute z-20 flex size-6 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border-2 text-xs font-bold text-white shadow-md",
+				"bg-green-500 border-green-300",
+				isSelected && "ring-2 ring-white/30",
+			)}
+			style={{
+				left: `${annotation.x}%`,
+				top: `${annotation.y}%`,
+			}}
+			initial={{ scale: 1 }}
+			animate={{
+				scale: [1, 1.5, 1.1],
+			}}
+			transition={{
+				duration: 0.4,
+				ease: "easeOut",
+				times: [0, 0.5, 1],
+			}}
+			aria-label={`Resolved: ${annotation.comment}`}
+		>
+			<motion.div
+				initial={{ opacity: 0, scale: 0 }}
+				animate={{ opacity: 1, scale: 1 }}
+				transition={{ delay: 0.1, duration: 0.2 }}
+			>
+				<svg className="size-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+					<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+				</svg>
+			</motion.div>
+		</motion.button>
+	);
+}
+
 export function ScreenMirror({
 	frameUrl,
 	connected,
 	error,
 	annotations,
 	selectedAnnotationId,
+	recentlyResolved,
+	interactionMode,
+	textRegions,
+	ocrLoading,
 	onClickScreen,
+	onAreaSelect,
+	onTextSelect,
 	onSelectAnnotation,
 }: ScreenMirrorProps) {
 	const imageRef = useRef<HTMLImageElement>(null);
 	const containerRef = useRef<HTMLDivElement>(null);
 	const [hoveredPin, setHoveredPin] = useState<string | null>(null);
 
+	// Drag state for area selection
+	const [dragStart, setDragStart] = useState<{ x: number; y: number } | null>(null);
+	const [dragCurrent, setDragCurrent] = useState<{ x: number; y: number } | null>(null);
+	const isDragging = dragStart !== null && dragCurrent !== null;
+
+	const getPercentCoords = useCallback(
+		(e: React.MouseEvent<HTMLDivElement>): { x: number; y: number } | null => {
+			const img = imageRef.current;
+			if (!img) return null;
+			const rect = img.getBoundingClientRect();
+			const xPct = ((e.clientX - rect.left) / rect.width) * 100;
+			const yPct = ((e.clientY - rect.top) / rect.height) * 100;
+			return {
+				x: Math.max(0, Math.min(100, xPct)),
+				y: Math.max(0, Math.min(100, yPct)),
+			};
+		},
+		[],
+	);
+
 	const handleClick = useCallback(
 		(e: React.MouseEvent<HTMLDivElement>) => {
-			const img = imageRef.current;
-			if (!img) return;
-
-			const rect = img.getBoundingClientRect();
-			const clickX = e.clientX - rect.left;
-			const clickY = e.clientY - rect.top;
-
-			// Calculate percentage coordinates relative to the image
-			const xPct = (clickX / rect.width) * 100;
-			const yPct = (clickY / rect.height) * 100;
-
-			// Clamp to valid range
-			const clampedX = Math.max(0, Math.min(100, xPct));
-			const clampedY = Math.max(0, Math.min(100, yPct));
-
-			onClickScreen(clampedX, clampedY);
+			if (interactionMode === "area") return;
+			const coords = getPercentCoords(e);
+			if (coords) onClickScreen(coords.x, coords.y);
 		},
-		[onClickScreen],
+		[interactionMode, onClickScreen, getPercentCoords],
 	);
+
+	const handleMouseDown = useCallback(
+		(e: React.MouseEvent<HTMLDivElement>) => {
+			if (interactionMode !== "area") return;
+			e.preventDefault();
+			const coords = getPercentCoords(e);
+			if (coords) {
+				setDragStart(coords);
+				setDragCurrent(coords);
+			}
+		},
+		[interactionMode, getPercentCoords],
+	);
+
+	const handleMouseMove = useCallback(
+		(e: React.MouseEvent<HTMLDivElement>) => {
+			if (!dragStart) return;
+			const coords = getPercentCoords(e);
+			if (coords) setDragCurrent(coords);
+		},
+		[dragStart, getPercentCoords],
+	);
+
+	const handleMouseUp = useCallback(() => {
+		if (!dragStart || !dragCurrent) return;
+		const x = Math.min(dragStart.x, dragCurrent.x);
+		const y = Math.min(dragStart.y, dragCurrent.y);
+		const width = Math.abs(dragCurrent.x - dragStart.x);
+		const height = Math.abs(dragCurrent.y - dragStart.y);
+
+		setDragStart(null);
+		setDragCurrent(null);
+
+		// Only create area if it's at least 2% in both dimensions (ignore tiny clicks)
+		if (width >= 2 && height >= 2) {
+			onAreaSelect({ x, y, width, height });
+		}
+	}, [dragStart, dragCurrent, onAreaSelect]);
+
+	// Calculate drag rect for rendering
+	const dragRect = isDragging
+		? {
+				left: Math.min(dragStart.x, dragCurrent.x),
+				top: Math.min(dragStart.y, dragCurrent.y),
+				width: Math.abs(dragCurrent.x - dragStart.x),
+				height: Math.abs(dragCurrent.y - dragStart.y),
+			}
+		: null;
 
 	// Empty state: no device connected
 	if (!connected && !frameUrl && !error) {
@@ -133,22 +283,117 @@ export function ScreenMirror({
 				<span className="text-xs text-neutral-500">{connected ? "Live" : "Disconnected"}</span>
 			</div>
 
+			{/* Resolution toast */}
+			<AnimatePresence>
+				{recentlyResolved && recentlyResolved.size > 0 && (
+					<motion.div
+						initial={{ opacity: 0, y: -10 }}
+						animate={{ opacity: 1, y: 0 }}
+						exit={{ opacity: 0, y: -10 }}
+						transition={{ duration: 0.2, ease: "easeOut" }}
+						className="absolute right-4 top-4 z-30 rounded-lg border border-green-800 bg-green-950/90 px-3 py-1.5 text-xs text-green-300"
+					>
+						Annotation resolved by agent
+					</motion.div>
+				)}
+			</AnimatePresence>
+
 			{/* Screen image with annotation overlay */}
 			<div className="relative max-h-full max-w-full">
 				{frameUrl && (
 					<>
-						{/* Clickable overlay area exactly matching the image */}
+						{/* Clickable/draggable overlay area exactly matching the image */}
 						<div
-							className="absolute inset-0 z-10 cursor-crosshair"
+							className={cn(
+								"absolute inset-0 z-10",
+								interactionMode === "area" ? "cursor-crosshair" : "cursor-crosshair",
+							)}
 							role="button"
 							tabIndex={0}
 							onClick={handleClick}
+							onMouseDown={handleMouseDown}
+							onMouseMove={handleMouseMove}
+							onMouseUp={handleMouseUp}
+							onMouseLeave={handleMouseUp}
 							onKeyDown={(e) => {
 								if (e.key === "Enter" || e.key === " ") {
 									handleClick(e as unknown as React.MouseEvent<HTMLDivElement>);
 								}
 							}}
 						/>
+
+						{/* Active drag selection rectangle */}
+						{dragRect && (
+							<div
+								className="pointer-events-none absolute z-20 border-2 border-dashed border-blue-400 bg-blue-400/10"
+								style={{
+									left: `${dragRect.left}%`,
+									top: `${dragRect.top}%`,
+									width: `${dragRect.width}%`,
+									height: `${dragRect.height}%`,
+								}}
+							/>
+						)}
+
+						{/* Area overlays for annotations with selectedArea */}
+						{annotations.map((annotation) =>
+							annotation.selectedArea ? (
+								<button
+									key={`area-${annotation.id}`}
+									type="button"
+									className={cn(
+										"absolute z-15 border-2 border-dashed transition-colors",
+										selectedAnnotationId === annotation.id
+											? "border-blue-400 bg-blue-400/15"
+											: "border-neutral-400/50 bg-neutral-400/5 hover:border-neutral-300/70 hover:bg-neutral-300/10",
+									)}
+									style={{
+										left: `${annotation.selectedArea.x}%`,
+										top: `${annotation.selectedArea.y}%`,
+										width: `${annotation.selectedArea.width}%`,
+										height: `${annotation.selectedArea.height}%`,
+									}}
+									onClick={(e) => {
+										e.stopPropagation();
+										onSelectAnnotation(annotation);
+									}}
+									aria-label={`Area annotation: ${annotation.comment}`}
+								/>
+							) : null,
+						)}
+
+						{/* OCR loading indicator */}
+						{ocrLoading && (
+							<div className="absolute inset-0 z-25 flex items-center justify-center bg-black/30">
+								<div className="flex items-center gap-2 rounded-lg bg-neutral-900/90 px-4 py-2">
+									<div className="size-4 animate-spin rounded-full border-2 border-neutral-700 border-t-neutral-300" />
+									<span className="text-xs text-neutral-300">Detecting text...</span>
+								</div>
+							</div>
+						)}
+
+						{/* OCR text region overlays */}
+						{interactionMode === "text" &&
+							textRegions &&
+							textRegions.map((region, idx) => (
+								<button
+									key={`text-${idx}-${region.x.toFixed(0)}-${region.y.toFixed(0)}`}
+									type="button"
+									className="absolute z-20 border border-amber-400/60 bg-amber-400/10 transition-colors hover:border-amber-300 hover:bg-amber-400/20"
+									style={{
+										left: `${region.x}%`,
+										top: `${region.y}%`,
+										width: `${region.width}%`,
+										height: `${region.height}%`,
+									}}
+									onClick={(e) => {
+										e.stopPropagation();
+										onTextSelect(region);
+									}}
+									title={region.text}
+									aria-label={`Text: ${region.text}`}
+								/>
+							))}
 
 						<img
 							ref={imageRef}
@@ -159,41 +404,58 @@ export function ScreenMirror({
 						/>
 
 						{/* Annotation pins */}
-						{annotations.map((annotation) => (
-							<button
-								type="button"
-								key={annotation.id}
-								onClick={(e) => {
-									e.stopPropagation();
-									onSelectAnnotation(annotation);
-								}}
-								onMouseEnter={() => setHoveredPin(annotation.id)}
-								onMouseLeave={() => setHoveredPin(null)}
-								className={cn(
-									"absolute z-20 flex size-6 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border-2 text-xs font-bold text-white shadow-md transition-transform",
-									pinColor(annotation.status),
-									selectedAnnotationId === annotation.id && "scale-125 ring-2 ring-white/30",
-								)}
-								style={{
-									left: `${annotation.x}%`,
-									top: `${annotation.y}%`,
-								}}
-								aria-label={`Annotation: ${annotation.comment}`}
-							>
-								{annotations.indexOf(annotation) + 1}
+						{annotations.map((annotation, idx) => {
+							const isResolved = recentlyResolved?.has(annotation.id);
+							const isSelected = selectedAnnotationId === annotation.id;
 
-								{/* Tooltip on hover */}
-								{hoveredPin === annotation.id && (
-									<div className="absolute bottom-full left-1/2 z-30 mb-2 w-48 -translate-x-1/2 rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-2 shadow-lg">
-										<p className="line-clamp-2 text-xs text-neutral-200">{annotation.comment}</p>
-										<div className="mt-1 flex items-center gap-2 text-xs text-neutral-500">
-											<span className="capitalize">{annotation.intent}</span>
-											<span>{annotation.severity}</span>
+							if (isResolved) {
+								return (
+									<ResolvedPin
+										key={annotation.id}
+										annotation={annotation}
+										index={idx + 1}
+										isSelected={isSelected}
+										onSelect={() => onSelectAnnotation(annotation)}
+									/>
+								);
+							}
+
+							return (
+								<button
+									type="button"
+									key={annotation.id}
+									onClick={(e) => {
+										e.stopPropagation();
+										onSelectAnnotation(annotation);
+									}}
+									onMouseEnter={() => setHoveredPin(annotation.id)}
+									onMouseLeave={() => setHoveredPin(null)}
+									className={cn(
+										"absolute z-20 flex size-6 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border-2 text-xs font-bold text-white shadow-md transition-transform",
+										pinColor(annotation.status),
+										isSelected && "scale-125 ring-2 ring-white/30",
+									)}
+									style={{
+										left: `${annotation.x}%`,
+										top: `${annotation.y}%`,
+									}}
+									aria-label={`Annotation: ${annotation.comment}`}
+								>
+									{idx + 1}
+
+									{/* Tooltip on hover */}
+									{hoveredPin === annotation.id && (
+										<div className="absolute bottom-full left-1/2 z-30 mb-2 w-48 -translate-x-1/2 rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-2 shadow-lg">
+											<p className="line-clamp-2 text-xs text-neutral-200">{annotation.comment}</p>
+											<div className="mt-1 flex items-center gap-2 text-xs text-neutral-500">
+												<span className="capitalize">{annotation.intent}</span>
+												<span>{annotation.severity}</span>
+											</div>
 										</div>
-									</div>
-								)}
-							</button>
-						))}
+									)}
+								</button>
+							);
+						})}
 					</>
 				)}
 			</div>

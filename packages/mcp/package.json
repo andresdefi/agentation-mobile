@@ -5,10 +5,10 @@
 	"license": "MIT",
 	"repository": {
 		"type": "git",
-		"url": "https://github.com/andresdefi/agentation-mobile.git",
+		"url": "git+https://github.com/andresdefi/agentation-mobile.git",
 		"directory": "packages/mcp"
 	},
-	"keywords": ["agentation", "mobile", "annotation", "mcp", "ai-agent", "model-context-protocol"],
+	"keywords": ["agentation", "mobile", "annotation", "mcp", "ai"],
 	"publishConfig": {
 		"access": "public"
 	},

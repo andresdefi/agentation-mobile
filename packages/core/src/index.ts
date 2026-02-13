@@ -18,5 +18,16 @@ export {
 } from "./schemas/enums";
 export { Store } from "./store";
 export type { CreateSessionInput, CreateAnnotationInput, ThreadMessage } from "./store";
-export { exportToJson, exportToMarkdown, formatGitHubIssueBody } from "./export";
-export type { ExportData } from "./export";
+export {
+	exportToJson,
+	exportToMarkdown,
+	exportToAgentMarkdown,
+	exportWithDetailLevel,
+	formatGitHubIssueBody,
+} from "./export";
+export type { DetailLevel, ExportData } from "./export";
+export {
+	generateAnnotationJsonSchema,
+	generateElementJsonSchema,
+	generateSessionJsonSchema,
+} from "./schema-export";

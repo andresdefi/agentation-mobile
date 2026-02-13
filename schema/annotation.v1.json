@@ -1,0 +1,213 @@
+{
+	"$ref": "#/definitions/MobileAnnotation",
+	"definitions": {
+		"MobileAnnotation": {
+			"type": "object",
+			"properties": {
+				"id": {
+					"type": "string"
+				},
+				"sessionId": {
+					"type": "string"
+				},
+				"x": {
+					"type": "number",
+					"minimum": 0,
+					"maximum": 100
+				},
+				"y": {
+					"type": "number",
+					"minimum": 0,
+					"maximum": 100
+				},
+				"deviceId": {
+					"type": "string"
+				},
+				"platform": {
+					"type": "string"
+				},
+				"screenWidth": {
+					"type": "number"
+				},
+				"screenHeight": {
+					"type": "number"
+				},
+				"screenshotId": {
+					"type": "string"
+				},
+				"resolvedScreenshotId": {
+					"type": "string"
+				},
+				"comment": {
+					"type": "string"
+				},
+				"intent": {
+					"type": "string",
+					"enum": ["fix", "change", "question", "approve"]
+				},
+				"severity": {
+					"type": "string",
+					"enum": ["blocking", "important", "suggestion"]
+				},
+				"status": {
+					"type": "string",
+					"enum": ["pending", "acknowledged", "resolved", "dismissed"],
+					"default": "pending"
+				},
+				"element": {
+					"type": "object",
+					"properties": {
+						"id": {
+							"type": "string"
+						},
+						"platform": {
+							"type": "string",
+							"enum": ["react-native", "flutter", "ios-native", "android-native"]
+						},
+						"componentPath": {
+							"type": "string"
+						},
+						"componentName": {
+							"type": "string"
+						},
+						"componentFile": {
+							"type": "string"
+						},
+						"boundingBox": {
+							"type": "object",
+							"properties": {
+								"x": {
+									"type": "number"
+								},
+								"y": {
+									"type": "number"
+								},
+								"width": {
+									"type": "number"
+								},
+								"height": {
+									"type": "number"
+								}
+							},
+							"required": ["x", "y", "width", "height"],
+							"additionalProperties": false
+						},
+						"styleProps": {
+							"type": "object",
+							"additionalProperties": {}
+						},
+						"accessibility": {
+							"type": "object",
+							"properties": {
+								"label": {
+									"type": "string"
+								},
+								"role": {
+									"type": "string"
+								},
+								"hint": {
+									"type": "string"
+								},
+								"value": {
+									"type": "string"
+								},
+								"traits": {
+									"type": "array",
+									"items": {
+										"type": "string"
+									}
+								}
+							},
+							"additionalProperties": false
+						},
+						"textContent": {
+							"type": "string"
+						},
+						"nearbyText": {
+							"type": "string"
+						}
+					},
+					"required": ["id", "platform", "componentPath", "componentName", "boundingBox"],
+					"additionalProperties": false
+				},
+				"selectedArea": {
+					"type": "object",
+					"properties": {
+						"x": {
+							"type": "number",
+							"minimum": 0,
+							"maximum": 100
+						},
+						"y": {
+							"type": "number",
+							"minimum": 0,
+							"maximum": 100
+						},
+						"width": {
+							"type": "number",
+							"minimum": 0,
+							"maximum": 100
+						},
+						"height": {
+							"type": "number",
+							"minimum": 0,
+							"maximum": 100
+						}
+					},
+					"required": ["x", "y", "width", "height"],
+					"additionalProperties": false
+				},
+				"selectedText": {
+					"type": "string"
+				},
+				"thread": {
+					"type": "array",
+					"items": {
+						"type": "object",
+						"properties": {
+							"role": {
+								"type": "string",
+								"enum": ["human", "agent"]
+							},
+							"content": {
+								"type": "string"
+							},
+							"timestamp": {
+								"type": "string",
+								"format": "date-time"
+							}
+						},
+						"required": ["role", "content", "timestamp"],
+						"additionalProperties": false
+					},
+					"default": []
+				},
+				"createdAt": {
+					"type": "string",
+					"format": "date-time"
+				},
+				"updatedAt": {
+					"type": "string",
+					"format": "date-time"
+				}
+			},
+			"required": [
+				"id",
+				"sessionId",
+				"x",
+				"y",
+				"deviceId",
+				"platform",
+				"screenWidth",
+				"screenHeight",
+				"comment",
+				"intent",
+				"severity",
+				"createdAt",
+				"updatedAt"
+			],
+			"additionalProperties": false
+		}
+	},
+	"$schema": "http://json-schema.org/draft-07/schema#"
+}

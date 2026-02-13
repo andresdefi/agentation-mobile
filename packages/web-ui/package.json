@@ -10,8 +10,10 @@
 		"clean": "rm -rf dist"
 	},
 	"dependencies": {
+		"motion": "^12.34.0",
 		"react": "^19.0.0",
-		"react-dom": "^19.0.0"
+		"react-dom": "^19.0.0",
+		"tesseract.js": "^7.0.0"
 	},
 	"devDependencies": {
 		"@types/react": "^19.0.2",

@@ -5,10 +5,10 @@
 	"license": "MIT",
 	"repository": {
 		"type": "git",
-		"url": "https://github.com/andresdefi/agentation-mobile.git",
+		"url": "git+https://github.com/andresdefi/agentation-mobile.git",
 		"directory": "packages/bridges/bridge-core"
 	},
-	"keywords": ["agentation", "mobile", "bridge"],
+	"keywords": ["agentation", "mobile", "annotation", "mcp", "ai"],
 	"publishConfig": {
 		"access": "public"
 	},

@@ -40,6 +40,12 @@ export interface IPlatformBridge {
 
 	/** Disconnect a WiFi-connected device (optional) */
 	disconnectDevice?(deviceId: string): Promise<{ success: boolean; message: string }>;
+
+	/** Pause/freeze all animations on the device (optional) */
+	pauseAnimations?(deviceId: string): Promise<{ success: boolean; message: string }>;
+
+	/** Resume animations on the device (optional) */
+	resumeAnimations?(deviceId: string): Promise<{ success: boolean; message: string }>;
 }
 
 export type { DeviceInfo as Device };

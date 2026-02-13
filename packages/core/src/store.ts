@@ -22,6 +22,8 @@ export interface CreateAnnotationInput {
 	intent: MobileAnnotation["intent"];
 	severity: MobileAnnotation["severity"];
 	element?: MobileAnnotation["element"];
+	selectedArea?: MobileAnnotation["selectedArea"];
+	selectedText?: string;
 }
 
 export interface ThreadMessage {
@@ -100,6 +102,8 @@ export class Store {
 			severity: input.severity,
 			status: "pending",
 			element: input.element,
+			selectedArea: input.selectedArea,
+			selectedText: input.selectedText,
 			thread: [],
 			createdAt: now,
 			updatedAt: now,

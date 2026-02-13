@@ -6,6 +6,7 @@ interface UseAnnotationsResult {
 	annotations: MobileAnnotation[];
 	loading: boolean;
 	error: string | null;
+	recentlyResolved: Set<string>;
 	createAnnotation: (payload: CreateAnnotationPayload) => Promise<MobileAnnotation>;
 	reply: (annotationId: string, content: string) => Promise<MobileAnnotation>;
 	updateStatus: (
@@ -19,8 +20,10 @@ export function useAnnotations(sessionId: string | null): UseAnnotationsResult {
 	const [annotations, setAnnotations] = useState<MobileAnnotation[]>([]);
 	const [loading, setLoading] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+	const [recentlyResolved, setRecentlyResolved] = useState<Set<string>>(new Set());
 	const mountedRef = useRef(true);
 	const eventSourceRef = useRef<EventSource | null>(null);
+	const resolvedTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
 	const fetchAnnotations = useCallback(async () => {
 		if (!sessionId) {
@@ -46,6 +49,32 @@ export function useAnnotations(sessionId: string | null): UseAnnotationsResult {
 		}
 	}, [sessionId]);
 
+	// Track recently resolved annotations for animation (auto-clears after 3s)
+	const markResolved = useCallback((id: string) => {
+		setRecentlyResolved((prev) => new Set(prev).add(id));
+		const timer = setTimeout(() => {
+			setRecentlyResolved((prev) => {
+				const next = new Set(prev);
+				next.delete(id);
+				return next;
+			});
+			resolvedTimersRef.current.delete(id);
+		}, 3000);
+		// Clear any existing timer for this id
+		const existing = resolvedTimersRef.current.get(id);
+		if (existing) clearTimeout(existing);
+		resolvedTimersRef.current.set(id, timer);
+	}, []);
+
+	// Cleanup timers on unmount
+	useEffect(() => {
+		return () => {
+			for (const timer of resolvedTimersRef.current.values()) {
+				clearTimeout(timer);
+			}
+		};
+	}, []);
+
 	// Subscribe to SSE for real-time updates
 	useEffect(() => {
 		mountedRef.current = true;
@@ -66,6 +95,10 @@ export function useAnnotations(sessionId: string | null): UseAnnotationsResult {
 				setAnnotations((prev) => {
 					const idx = prev.findIndex((a) => a.id === annotation.id);
 					if (idx >= 0) {
+						// Detect resolution: was not resolved, now is
+						if (prev[idx].status !== "resolved" && annotation.status === "resolved") {
+							markResolved(annotation.id);
+						}
 						const next = [...prev];
 						next[idx] = annotation;
 						return next;
@@ -91,7 +124,7 @@ export function useAnnotations(sessionId: string | null): UseAnnotationsResult {
 			eventSource.close();
 			eventSourceRef.current = null;
 		};
-	}, [sessionId, fetchAnnotations]);
+	}, [sessionId, fetchAnnotations, markResolved]);
 
 	const createAnnotation = useCallback(
 		async (payload: CreateAnnotationPayload): Promise<MobileAnnotation> => {
@@ -139,6 +172,7 @@ export function useAnnotations(sessionId: string | null): UseAnnotationsResult {
 		annotations,
 		loading,
 		error,
+		recentlyResolved,
 		createAnnotation,
 		reply,
 		updateStatus,

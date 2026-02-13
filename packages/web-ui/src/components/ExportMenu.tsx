@@ -5,10 +5,14 @@ import { cn } from "../utils";
 interface ExportMenuProps {
 	sessionId: string | null;
 	disabled?: boolean;
+	isOpen?: boolean;
+	onOpenChange?: (open: boolean) => void;
 }
 
-export function ExportMenu({ sessionId, disabled }: ExportMenuProps) {
-	const [open, setOpen] = useState(false);
+export function ExportMenu({ sessionId, disabled, isOpen, onOpenChange }: ExportMenuProps) {
+	const [internalOpen, setInternalOpen] = useState(false);
+	const open = isOpen ?? internalOpen;
+	const setOpen = onOpenChange ?? setInternalOpen;
 	const menuRef = useRef<HTMLDivElement>(null);
 
 	const handleExport = useCallback(
@@ -43,7 +47,7 @@ export function ExportMenu({ sessionId, disabled }: ExportMenuProps) {
 				console.error("Export failed:", err);
 			}
 		},
-		[sessionId],
+		[sessionId, setOpen],
 	);
 
 	return (

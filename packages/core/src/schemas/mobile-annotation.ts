@@ -8,6 +8,13 @@ export const ThreadMessageSchema = z.object({
 	timestamp: z.string().datetime(),
 });
 
+export const SelectedAreaSchema = z.object({
+	x: z.number().min(0).max(100),
+	y: z.number().min(0).max(100),
+	width: z.number().min(0).max(100),
+	height: z.number().min(0).max(100),
+});
+
 export const MobileAnnotationSchema = z.object({
 	id: z.string(),
 	sessionId: z.string(),
@@ -24,6 +31,8 @@ export const MobileAnnotationSchema = z.object({
 	severity: AnnotationSeveritySchema,
 	status: AnnotationStatusSchema.default("pending"),
 	element: MobileElementSchema.optional(),
+	selectedArea: SelectedAreaSchema.optional(),
+	selectedText: z.string().optional(),
 	thread: z.array(ThreadMessageSchema).default([]),
 	createdAt: z.string().datetime(),
 	updatedAt: z.string().datetime(),

@@ -94,17 +94,31 @@ function callVmServiceMethod(
 }
 
 // ---------------------------------------------------------------------------
-// VM Service URL discovery
+// VM Service URL discovery (with per-device cache)
 // ---------------------------------------------------------------------------
+
+/** Cached VM Service URLs per device. TTL 60s. */
+const vmUrlCache = new Map<string, { url: string; expiresAt: number }>();
+const VM_URL_CACHE_TTL = 60_000;
 
 /**
  * Try multiple strategies to discover the Dart VM Service WebSocket URL
- * for the given device.
+ * for the given device, using a cache to avoid repeated discovery.
  *
  * Strategy 1: Parse `flutter daemon` / logcat output for observatory URLs.
  * Strategy 2: Scan common ports on localhost.
  */
 async function discoverVmServiceUrl(deviceId: string): Promise<string | null> {
+	// Check cache first
+	const cached = vmUrlCache.get(deviceId);
+	if (cached && cached.expiresAt > Date.now()) {
+		return cached.url;
+	}
+	const cacheAndReturn = (url: string): string => {
+		vmUrlCache.set(deviceId, { url, expiresAt: Date.now() + VM_URL_CACHE_TTL });
+		return url;
+	};
+
 	// Strategy 1: For Android devices, search adb logcat for the observatory URL
 	if (!IOS_UDID_REGEX.test(deviceId)) {
 		try {
@@ -115,14 +129,14 @@ async function discoverVmServiceUrl(deviceId: string): Promise<string | null> {
 			);
 			const wsMatch = stdout.match(/(?:Observatory|Dart VM service).*?(wss?:\/\/\S+)/i);
 			if (wsMatch) {
-				return normalizeVmServiceUrl(wsMatch[1]);
+				return cacheAndReturn(normalizeVmServiceUrl(wsMatch[1]));
 			}
 			// Also look for http observatory URLs and convert to ws
 			const httpMatch = stdout.match(
 				/(?:Observatory|Dart VM service).*?(https?:\/\/127\.0\.0\.1:\d+\/\S*)/i,
 			);
 			if (httpMatch) {
-				return httpToWs(httpMatch[1]);
+				return cacheAndReturn(httpToWs(httpMatch[1]));
 			}
 		} catch {
 			// fall through to port scanning
@@ -138,7 +152,7 @@ async function discoverVmServiceUrl(deviceId: string): Promise<string | null> {
 			const resp = await callVmServiceMethod(ws, "getVersion");
 			ws.close();
 			if (resp.result && typeof resp.result.major === "number") {
-				return url;
+				return cacheAndReturn(url);
 			}
 		} catch {
 			// port not available, try next
@@ -642,6 +656,112 @@ export class FlutterBridge implements IPlatformBridge {
 	async inspectElement(deviceId: string, x: number, y: number): Promise<MobileElement | null> {
 		const elements = await this.getElementTree(deviceId);
 		return hitTestElement(elements, x, y);
+	}
+
+	async pauseAnimations(deviceId: string): Promise<{ success: boolean; message: string }> {
+		let ws: WebSocket | null = null;
+		try {
+			const vmUrl = await discoverVmServiceUrl(deviceId);
+			if (!vmUrl) {
+				return {
+					success: false,
+					message: "Could not discover Flutter VM Service",
+				};
+			}
+
+			ws = await connectToVmService(vmUrl);
+			const vmResp = await callVmServiceMethod(ws, "getVM");
+			if (vmResp.error || !vmResp.result) {
+				return { success: false, message: "Failed to connect to VM" };
+			}
+
+			const isolates = vmResp.result.isolates as Array<{ id: string; name: string }> | undefined;
+			const mainIsolate = isolates?.find((iso) => iso.name === "main") ?? isolates?.[0];
+			if (!mainIsolate) {
+				return { success: false, message: "No Flutter isolate found" };
+			}
+
+			// Set timeDilation to a very high value to effectively freeze animations
+			const resp = await callVmServiceMethod(ws, "ext.flutter.timeDilation", {
+				isolateId: mainIsolate.id,
+				timeDilation: 100.0,
+			});
+
+			if (resp.error) {
+				return {
+					success: false,
+					message: `Failed to set timeDilation: ${JSON.stringify(resp.error)}`,
+				};
+			}
+
+			return {
+				success: true,
+				message: "Animations paused (timeDilation set to 100x)",
+			};
+		} catch (err) {
+			return { success: false, message: `${err}` };
+		} finally {
+			if (ws) {
+				try {
+					ws.close();
+				} catch {
+					// ignore
+				}
+			}
+		}
+	}
+
+	async resumeAnimations(deviceId: string): Promise<{ success: boolean; message: string }> {
+		let ws: WebSocket | null = null;
+		try {
+			const vmUrl = await discoverVmServiceUrl(deviceId);
+			if (!vmUrl) {
+				return {
+					success: false,
+					message: "Could not discover Flutter VM Service",
+				};
+			}
+
+			ws = await connectToVmService(vmUrl);
+			const vmResp = await callVmServiceMethod(ws, "getVM");
+			if (vmResp.error || !vmResp.result) {
+				return { success: false, message: "Failed to connect to VM" };
+			}
+
+			const isolates = vmResp.result.isolates as Array<{ id: string; name: string }> | undefined;
+			const mainIsolate = isolates?.find((iso) => iso.name === "main") ?? isolates?.[0];
+			if (!mainIsolate) {
+				return { success: false, message: "No Flutter isolate found" };
+			}
+
+			// Restore normal timeDilation
+			const resp = await callVmServiceMethod(ws, "ext.flutter.timeDilation", {
+				isolateId: mainIsolate.id,
+				timeDilation: 1.0,
+			});
+
+			if (resp.error) {
+				return {
+					success: false,
+					message: `Failed to restore timeDilation: ${JSON.stringify(resp.error)}`,
+				};
+			}
+
+			return {
+				success: true,
+				message: "Animations restored to normal speed",
+			};
+		} catch (err) {
+			return { success: false, message: `${err}` };
+		} finally {
+			if (ws) {
+				try {
+					ws.close();
+				} catch {
+					// ignore
+				}
+			}
+		}
 	}
 
 	// -------------------------------------------------------------------

@@ -1,6 +1,8 @@
 import type { MobileAnnotation } from "./schemas/mobile-annotation";
 import type { Session } from "./schemas/session";
 
+export type DetailLevel = "compact" | "standard" | "detailed" | "forensic";
+
 export interface ExportData {
 	session?: Session;
 	annotations: MobileAnnotation[];
@@ -48,6 +50,17 @@ export function exportToMarkdown(annotations: MobileAnnotation[], session?: Sess
 			);
 		}
 
+		if (annotation.selectedArea) {
+			const sa = annotation.selectedArea;
+			lines.push(
+				`- **Area:** ${sa.width.toFixed(0)}% x ${sa.height.toFixed(0)}% at (${sa.x.toFixed(0)}%, ${sa.y.toFixed(0)}%)`,
+			);
+		}
+
+		if (annotation.selectedText) {
+			lines.push(`- **Selected Text:** "${annotation.selectedText}"`);
+		}
+
 		lines.push(`- **Created:** ${annotation.createdAt}`);
 
 		if (annotation.thread.length > 0) {
@@ -64,6 +77,167 @@ export function exportToMarkdown(annotations: MobileAnnotation[], session?: Sess
 	return lines.join("\n");
 }
 
+/**
+ * Compact, greppable markdown format optimized for AI agents.
+ * Designed to be pasted into any AI tool (ChatGPT, Claude, etc.)
+ */
+export function exportToAgentMarkdown(annotations: MobileAnnotation[], session?: Session): string {
+	const lines: string[] = [];
+
+	if (session) {
+		lines.push(`# ${session.name} — ${annotations.length} annotations`);
+		lines.push(`Platform: ${session.platform} | Device: ${session.deviceId}`);
+	} else {
+		lines.push(`# ${annotations.length} annotations`);
+	}
+	lines.push("");
+
+	for (let i = 0; i < annotations.length; i++) {
+		const a = annotations[i];
+
+		// Source ref line: "1. [fix/important] Button (src/screens/Login.tsx)"
+		let ref = `${i + 1}. [${a.intent}/${a.severity}]`;
+		if (a.element?.componentName) {
+			ref += ` ${a.element.componentName}`;
+			if (a.element.componentFile) {
+				ref += ` (${a.element.componentFile})`;
+			} else if (a.element.componentPath) {
+				ref += ` > ${a.element.componentPath}`;
+			}
+		}
+		lines.push(ref);
+
+		// Comment
+		lines.push(`   ${a.comment}`);
+
+		// Status + position on same line
+		let posLine = `   Status: ${a.status} | Position: ${a.x.toFixed(1)}%, ${a.y.toFixed(1)}%`;
+		if (a.selectedArea) {
+			posLine += ` | Area: ${a.selectedArea.width.toFixed(0)}%x${a.selectedArea.height.toFixed(0)}%`;
+		}
+		lines.push(posLine);
+
+		if (a.selectedText) {
+			lines.push(`   Text: "${a.selectedText}"`);
+		}
+
+		// Thread replies (compact)
+		if (a.thread.length > 0) {
+			for (const msg of a.thread) {
+				lines.push(`   > ${msg.role}: ${msg.content}`);
+			}
+		}
+
+		lines.push("");
+	}
+
+	return lines.join("\n").trimEnd();
+}
+
+/**
+ * Export annotations with configurable detail level.
+ *
+ * - compact: comment + intent + severity only
+ * - standard: + position, device, component name (default)
+ * - detailed: + element tree context, bounding boxes, thread
+ * - forensic: + full element properties, accessibility, styles, nearby elements
+ */
+export function exportWithDetailLevel(
+	annotations: MobileAnnotation[],
+	level: DetailLevel = "standard",
+	session?: Session,
+): string {
+	const lines: string[] = [];
+
+	if (session) {
+		lines.push(`# ${session.name} — ${annotations.length} annotations`);
+		if (level !== "compact") {
+			lines.push(`Platform: ${session.platform} | Device: ${session.deviceId}`);
+		}
+	} else {
+		lines.push(`# ${annotations.length} annotations`);
+	}
+	lines.push("");
+
+	for (let i = 0; i < annotations.length; i++) {
+		const a = annotations[i];
+
+		// All levels: intent/severity + comment
+		let ref = `${i + 1}. [${a.intent}/${a.severity}]`;
+
+		// Standard+: component name
+		if (level !== "compact" && a.element?.componentName) {
+			ref += ` ${a.element.componentName}`;
+			if (a.element.componentFile) {
+				ref += ` (${a.element.componentFile})`;
+			} else if (a.element.componentPath) {
+				ref += ` > ${a.element.componentPath}`;
+			}
+		}
+		lines.push(ref);
+		lines.push(`   ${a.comment}`);
+
+		// Standard+: status + position + device + area + text
+		if (level !== "compact") {
+			let posLine = `   Status: ${a.status} | Position: ${a.x.toFixed(1)}%, ${a.y.toFixed(1)}%`;
+			if (a.selectedArea) {
+				posLine += ` | Area: ${a.selectedArea.width.toFixed(0)}%x${a.selectedArea.height.toFixed(0)}% at (${a.selectedArea.x.toFixed(0)}%,${a.selectedArea.y.toFixed(0)}%)`;
+			}
+			lines.push(posLine);
+			if (a.selectedText) {
+				lines.push(`   SelectedText: "${a.selectedText}"`);
+			}
+			lines.push(`   Device: ${a.deviceId} (${a.platform}) ${a.screenWidth}x${a.screenHeight}`);
+		}
+
+		// Detailed+: bounding box, component path, thread
+		if (level === "detailed" || level === "forensic") {
+			if (a.element?.componentPath) {
+				lines.push(`   Path: ${a.element.componentPath}`);
+			}
+			if (a.element?.boundingBox) {
+				const bb = a.element.boundingBox;
+				lines.push(`   BoundingBox: ${bb.x},${bb.y} ${bb.width}x${bb.height}`);
+			}
+			if (a.thread.length > 0) {
+				for (const msg of a.thread) {
+					lines.push(`   > ${msg.role}: ${msg.content}`);
+				}
+			}
+		}
+
+		// Forensic: full element properties
+		if (level === "forensic" && a.element) {
+			if (a.element.textContent) {
+				lines.push(`   Text: "${a.element.textContent}"`);
+			}
+			if (a.element.nearbyText) {
+				lines.push(`   NearbyText: "${a.element.nearbyText}"`);
+			}
+			if (a.element.accessibility) {
+				const acc = a.element.accessibility;
+				const parts: string[] = [];
+				if (acc.role) parts.push(`role=${acc.role}`);
+				if (acc.label) parts.push(`label="${acc.label}"`);
+				if (acc.hint) parts.push(`hint="${acc.hint}"`);
+				if (acc.value) parts.push(`value="${acc.value}"`);
+				if (acc.traits?.length) parts.push(`traits=[${acc.traits.join(",")}]`);
+				if (parts.length > 0) {
+					lines.push(`   Accessibility: ${parts.join(" | ")}`);
+				}
+			}
+			if (a.element.styleProps && Object.keys(a.element.styleProps).length > 0) {
+				lines.push(`   Styles: ${JSON.stringify(a.element.styleProps)}`);
+			}
+			lines.push(`   Created: ${a.createdAt} | Updated: ${a.updatedAt}`);
+		}
+
+		lines.push("");
+	}
+
+	return lines.join("\n").trimEnd();
+}
+
 export function formatGitHubIssueBody(annotation: MobileAnnotation, session?: Session): string {
 	const lines: string[] = [];
 
@@ -77,6 +251,15 @@ export function formatGitHubIssueBody(annotation: MobileAnnotation, session?: Se
 	lines.push("## Context");
 	lines.push("");
 	lines.push(`- **Position:** ${annotation.x}%, ${annotation.y}%`);
+	if (annotation.selectedArea) {
+		const sa = annotation.selectedArea;
+		lines.push(
+			`- **Selected Area:** ${sa.width.toFixed(0)}% x ${sa.height.toFixed(0)}% at (${sa.x.toFixed(0)}%, ${sa.y.toFixed(0)}%)`,
+		);
+	}
+	if (annotation.selectedText) {
+		lines.push(`- **Selected Text:** "${annotation.selectedText}"`);
+	}
 	lines.push(`- **Screen:** ${annotation.screenWidth}x${annotation.screenHeight}`);
 	lines.push(`- **Device:** ${annotation.deviceId}`);
 	lines.push(`- **Platform:** ${annotation.platform}`);

@@ -298,6 +298,10 @@ function boundingBoxArea(box: { width: number; height: number }): number {
 	return box.width * box.height;
 }
 
+// Exported for testing
+export { parseAccessibilityOutput, mapIosRole, pointInBounds, boundingBoxArea };
+export type { AccessibilityNode };
+
 export class IosBridge implements IPlatformBridge {
 	readonly platform = "ios-native" as const;
 
@@ -447,15 +451,93 @@ export class IosBridge implements IPlatformBridge {
 			});
 
 			if (!stdout || stdout.trim().length === 0) {
-				return [];
+				return this.buildFallbackRoot(deviceId);
 			}
 
-			return this.parseAccessibilityTree(stdout);
+			const elements = this.parseAccessibilityTree(stdout);
+			if (elements.length === 0) {
+				return this.buildFallbackRoot(deviceId);
+			}
+
+			return elements;
 		} catch {
 			// `xcrun simctl ui` may not be available in all Xcode versions.
-			// Return an empty array; element inspection will be provided by
-			// the in-app SDK in Phase 3.
-			return [];
+			// Return a fallback root element so callers always get at least one element.
+			return this.buildFallbackRoot(deviceId);
+		}
+	}
+
+	/**
+	 * Build a single fallback root element when the accessibility tree is
+	 * empty or unavailable. This ensures callers always get at least one
+	 * element representing the full screen.
+	 */
+	private buildFallbackRoot(deviceId: string): MobileElement[] {
+		return [
+			{
+				id: `ios:root:${deviceId}`,
+				platform: "ios-native",
+				componentPath: "Application",
+				componentName: "Application",
+				boundingBox: { x: 0, y: 0, width: 0, height: 0 },
+				accessibility: {
+					role: "application",
+				},
+			},
+		];
+	}
+
+	async pauseAnimations(deviceId: string): Promise<{ success: boolean; message: string }> {
+		try {
+			// Set simulator animation speed to 0 (frozen)
+			await execFile(
+				"xcrun",
+				[
+					"simctl",
+					"spawn",
+					deviceId,
+					"defaults",
+					"write",
+					"com.apple.UIKit",
+					"UIAnimationDragCoefficient",
+					"-float",
+					"999",
+				],
+				{ timeout: SIMCTL_TIMEOUT },
+			);
+			return {
+				success: true,
+				message: "Animations paused (drag coefficient set to maximum)",
+			};
+		} catch (err) {
+			return { success: false, message: `${err}` };
+		}
+	}
+
+	async resumeAnimations(deviceId: string): Promise<{ success: boolean; message: string }> {
+		try {
+			// Restore normal animation speed
+			await execFile(
+				"xcrun",
+				[
+					"simctl",
+					"spawn",
+					deviceId,
+					"defaults",
+					"write",
+					"com.apple.UIKit",
+					"UIAnimationDragCoefficient",
+					"-float",
+					"1",
+				],
+				{ timeout: SIMCTL_TIMEOUT },
+			);
+			return {
+				success: true,
+				message: "Animations restored to normal speed",
+			};
+		} catch (err) {
+			return { success: false, message: `${err}` };
 		}
 	}
 
