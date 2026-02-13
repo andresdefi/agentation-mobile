@@ -9,6 +9,7 @@ import { createAnnotationRoutes } from "./routes/annotations";
 import { createDeviceRoutes } from "./routes/devices";
 import { createSessionRoutes } from "./routes/sessions";
 import { createSSERouter } from "./routes/sse";
+import { ScrcpyStream } from "./scrcpy-stream";
 import { type WebhookConfig, setupWebhooks } from "./webhooks";
 
 export interface ServerConfig {
@@ -134,6 +135,7 @@ export function createServer(config: ServerConfig = {}): Server {
 			return;
 		}
 
+		let stream: ScrcpyStream | null = null;
 		let interval: ReturnType<typeof setInterval> | null = null;
 		let capturing = false;
 
@@ -144,11 +146,49 @@ export function createServer(config: ServerConfig = {}): Server {
 				return;
 			}
 
+			// Attempt high-performance scrcpy-based streaming first.
+			// The stream detects scrcpy + ffmpeg availability internally and
+			// falls back to adaptive ADB screencap polling when they are missing.
+			const hasScrcpy = await ScrcpyStream.isAvailable();
+			if (hasScrcpy) {
+				stream = new ScrcpyStream({ deviceId });
+
+				stream.on("frame", (frame: Buffer) => {
+					if (ws.readyState === WebSocket.OPEN) {
+						ws.send(frame);
+					}
+				});
+
+				stream.on("error", () => {
+					// Non-fatal — individual frame errors are swallowed.
+				});
+
+				stream.on("close", () => {
+					// scrcpy exited unexpectedly — fall back to polling.
+					stream = null;
+					if (ws.readyState === WebSocket.OPEN) {
+						startPollingFallback(bridge, deviceId);
+					}
+				});
+
+				try {
+					await stream.start();
+					return;
+				} catch {
+					// scrcpy failed to start — fall back to polling
+					stream = null;
+				}
+			}
+
+			startPollingFallback(bridge, deviceId);
+		};
+
+		const startPollingFallback = (bridge: IPlatformBridge, devId: string) => {
 			interval = setInterval(async () => {
 				if (capturing || ws.readyState !== WebSocket.OPEN) return;
 				capturing = true;
 				try {
-					const frame = await bridge.captureScreen(deviceId);
+					const frame = await bridge.captureScreen(devId);
 					if (ws.readyState === WebSocket.OPEN) {
 						ws.send(frame);
 					}
@@ -163,7 +203,14 @@ export function createServer(config: ServerConfig = {}): Server {
 		startCapture();
 
 		ws.on("close", () => {
-			if (interval) clearInterval(interval);
+			if (stream) {
+				stream.stop();
+				stream = null;
+			}
+			if (interval) {
+				clearInterval(interval);
+				interval = null;
+			}
 		});
 	});
 

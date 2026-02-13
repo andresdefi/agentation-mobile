@@ -3,10 +3,12 @@ import { AnnotationFilters, type Filters } from "./components/AnnotationFilters"
 import { AnnotationForm } from "./components/AnnotationForm";
 import { AnnotationPanel } from "./components/AnnotationPanel";
 import { DeviceSelector } from "./components/DeviceSelector";
+import { ElementTreePanel } from "./components/ElementTreePanel";
 import { ScreenMirror } from "./components/ScreenMirror";
 import { ThreadView } from "./components/ThreadView";
 import { useAnnotations } from "./hooks/use-annotations";
 import { useDevices } from "./hooks/use-devices";
+import { useElementTree } from "./hooks/use-element-tree";
 import { useScreenMirror } from "./hooks/use-screen-mirror";
 import { useSessions } from "./hooks/use-sessions";
 import type {
@@ -15,6 +17,7 @@ import type {
 	AnnotationStatus,
 	DeviceInfo,
 	MobileAnnotation,
+	MobileElement,
 } from "./types";
 import { cn } from "./utils";
 
@@ -39,6 +42,14 @@ export function App() {
 	// Screen mirror
 	const { frameUrl, connected, error: mirrorError } = useScreenMirror(selectedDevice?.id ?? null);
 
+	// Element tree
+	const {
+		elements,
+		loading: elementsLoading,
+		error: elementsError,
+		refresh: refreshElements,
+	} = useElementTree(selectedDevice?.id ?? null);
+
 	// UI state
 	const [clickCoords, setClickCoords] = useState<{
 		x: number;
@@ -46,7 +57,9 @@ export function App() {
 	} | null>(null);
 	const [selectedAnnotation, setSelectedAnnotation] = useState<MobileAnnotation | null>(null);
 	const [submittingAnnotation, setSubmittingAnnotation] = useState(false);
+	const [sidebarTab, setSidebarTab] = useState<"annotations" | "elements">("annotations");
 	const [sidebarView, setSidebarView] = useState<"list" | "thread">("list");
+	const [selectedElement, setSelectedElement] = useState<MobileElement | null>(null);
 	const [filters, setFilters] = useState<Filters>({
 		status: null,
 		intent: null,
@@ -256,9 +269,37 @@ export function App() {
 					/>
 				</div>
 
+				{/* Sidebar tabs */}
+				{sidebarView !== "thread" && (
+					<div className="flex border-b border-neutral-800">
+						<button
+							onClick={() => setSidebarTab("annotations")}
+							className={cn(
+								"flex-1 px-4 py-2 text-xs font-medium transition-colors",
+								sidebarTab === "annotations"
+									? "border-b-2 border-neutral-400 text-neutral-200"
+									: "text-neutral-500 hover:text-neutral-300",
+							)}
+						>
+							Annotations
+						</button>
+						<button
+							onClick={() => setSidebarTab("elements")}
+							className={cn(
+								"flex-1 px-4 py-2 text-xs font-medium transition-colors",
+								sidebarTab === "elements"
+									? "border-b-2 border-neutral-400 text-neutral-200"
+									: "text-neutral-500 hover:text-neutral-300",
+							)}
+						>
+							Elements
+						</button>
+					</div>
+				)}
+
 				{/* Sidebar content */}
 				<div className="flex flex-1 flex-col overflow-hidden">
-					{sidebarView === "list" && (
+					{sidebarView === "list" && sidebarTab === "annotations" && (
 						<>
 							{/* Annotation count header */}
 							<div className="flex items-center justify-between px-4 py-2">
@@ -288,6 +329,17 @@ export function App() {
 								/>
 							</div>
 						</>
+					)}
+
+					{sidebarView === "list" && sidebarTab === "elements" && (
+						<ElementTreePanel
+							elements={elements}
+							loading={elementsLoading}
+							error={elementsError}
+							selectedElementId={selectedElement?.id ?? null}
+							onSelectElement={setSelectedElement}
+							onRefresh={refreshElements}
+						/>
 					)}
 
 					{sidebarView === "thread" && liveSelectedAnnotation && (

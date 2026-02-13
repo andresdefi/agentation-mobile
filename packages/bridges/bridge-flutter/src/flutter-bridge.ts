@@ -1,31 +1,741 @@
+import { execFile as execFileCb } from "node:child_process";
+import { promisify } from "node:util";
 import type { DeviceInfo, IPlatformBridge } from "@agentation-mobile/bridge-core";
 import type { MobileElement } from "@agentation-mobile/core";
+import WebSocket from "ws";
+
+const execFile = promisify(execFileCb);
+
+/** Maximum time (ms) to wait for CLI commands. */
+const CLI_TIMEOUT = 15_000;
+
+/** Maximum buffer size (bytes) for screenshot output (~25 MB). */
+const MAX_BUFFER = 25 * 1024 * 1024;
+
+/** Timeout (ms) for WebSocket connections and JSON-RPC calls. */
+const WS_TIMEOUT = 8_000;
+
+/** Common Dart VM Service ports to scan when discovery fails. */
+const VM_SERVICE_PORTS = [8181, 8182, 8183, 8184, 8185];
+
+/**
+ * UUID pattern used to identify iOS simulator device IDs.
+ * e.g. "A1B2C3D4-E5F6-7890-ABCD-EF1234567890"
+ */
+const IOS_UDID_REGEX = /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/i;
+
+// ---------------------------------------------------------------------------
+// JSON-RPC helpers for Dart VM Service
+// ---------------------------------------------------------------------------
+
+interface JsonRpcResponse {
+	id: number;
+	result?: Record<string, unknown>;
+	error?: { code: number; message: string; data?: unknown };
+}
+
+/** Monotonically increasing JSON-RPC request ID. */
+let rpcIdCounter = 1;
+
+/**
+ * Open a WebSocket connection to the given URL with a timeout.
+ */
+function connectToVmService(url: string): Promise<WebSocket> {
+	return new Promise((resolve, reject) => {
+		const ws = new WebSocket(url);
+		const timer = setTimeout(() => {
+			ws.terminate();
+			reject(new Error("VM Service WebSocket connection timed out"));
+		}, WS_TIMEOUT);
+
+		ws.on("open", () => {
+			clearTimeout(timer);
+			resolve(ws);
+		});
+		ws.on("error", (err) => {
+			clearTimeout(timer);
+			reject(err);
+		});
+	});
+}
+
+/**
+ * Send a JSON-RPC 2.0 request over the WebSocket and await the matching
+ * response by ID.
+ */
+function callVmServiceMethod(
+	ws: WebSocket,
+	method: string,
+	params: Record<string, unknown> = {},
+): Promise<JsonRpcResponse> {
+	const id = rpcIdCounter++;
+	return new Promise((resolve, reject) => {
+		const timer = setTimeout(() => {
+			ws.off("message", handler);
+			reject(new Error(`VM Service call '${method}' timed out`));
+		}, WS_TIMEOUT);
+
+		const handler = (data: WebSocket.Data) => {
+			try {
+				const msg = JSON.parse(data.toString()) as JsonRpcResponse;
+				if (msg.id === id) {
+					clearTimeout(timer);
+					ws.off("message", handler);
+					resolve(msg);
+				}
+			} catch {
+				// ignore non-JSON or unrelated messages
+			}
+		};
+
+		ws.on("message", handler);
+		ws.send(JSON.stringify({ jsonrpc: "2.0", id, method, params }));
+	});
+}
+
+// ---------------------------------------------------------------------------
+// VM Service URL discovery
+// ---------------------------------------------------------------------------
+
+/**
+ * Try multiple strategies to discover the Dart VM Service WebSocket URL
+ * for the given device.
+ *
+ * Strategy 1: Parse `flutter daemon` / logcat output for observatory URLs.
+ * Strategy 2: Scan common ports on localhost.
+ */
+async function discoverVmServiceUrl(deviceId: string): Promise<string | null> {
+	// Strategy 1: For Android devices, search adb logcat for the observatory URL
+	if (!IOS_UDID_REGEX.test(deviceId)) {
+		try {
+			const { stdout } = await execFile(
+				"adb",
+				["-s", deviceId, "logcat", "-d", "-s", "flutter", "Observatory", "FlutterJNI"],
+				{ timeout: CLI_TIMEOUT, maxBuffer: MAX_BUFFER },
+			);
+			const wsMatch = stdout.match(/(?:Observatory|Dart VM service).*?(wss?:\/\/\S+)/i);
+			if (wsMatch) {
+				return normalizeVmServiceUrl(wsMatch[1]);
+			}
+			// Also look for http observatory URLs and convert to ws
+			const httpMatch = stdout.match(
+				/(?:Observatory|Dart VM service).*?(https?:\/\/127\.0\.0\.1:\d+\/\S*)/i,
+			);
+			if (httpMatch) {
+				return httpToWs(httpMatch[1]);
+			}
+		} catch {
+			// fall through to port scanning
+		}
+	}
+
+	// Strategy 2: Scan common ports
+	for (const port of VM_SERVICE_PORTS) {
+		const url = `ws://127.0.0.1:${port}/ws`;
+		try {
+			const ws = await connectToVmService(url);
+			// Verify it's a Dart VM Service by requesting the version
+			const resp = await callVmServiceMethod(ws, "getVersion");
+			ws.close();
+			if (resp.result && typeof resp.result.major === "number") {
+				return url;
+			}
+		} catch {
+			// port not available, try next
+		}
+	}
+
+	return null;
+}
+
+/**
+ * Convert an HTTP observatory URL to a WebSocket URL.
+ */
+function httpToWs(httpUrl: string): string {
+	let url = httpUrl.replace(/^http/, "ws");
+	if (!url.endsWith("/ws") && !url.endsWith("/ws/")) {
+		url = url.replace(/\/?$/, "ws");
+	}
+	return url;
+}
+
+/**
+ * Ensure a VM Service URL ends with /ws for proper WebSocket connection.
+ */
+function normalizeVmServiceUrl(url: string): string {
+	if (url.startsWith("http")) {
+		return httpToWs(url);
+	}
+	if (!url.endsWith("/ws") && !url.endsWith("/ws/")) {
+		return url.replace(/\/?$/, "/ws");
+	}
+	return url;
+}
+
+// ---------------------------------------------------------------------------
+// Flutter device JSON from `flutter devices --machine`
+// ---------------------------------------------------------------------------
+
+interface FlutterDeviceJson {
+	id: string;
+	name: string;
+	isSupported: boolean;
+	targetPlatform: string;
+	emulator: boolean;
+	sdk: string;
+	capabilities?: {
+		hotReload?: boolean;
+		hotRestart?: boolean;
+		screenshot?: boolean;
+		fastStart?: boolean;
+		flutterExit?: boolean;
+		hardwareRendering?: boolean;
+		startPaused?: boolean;
+	};
+}
+
+// ---------------------------------------------------------------------------
+// Widget tree types from Dart VM Service
+// ---------------------------------------------------------------------------
+
+interface VmWidgetNode {
+	description?: string;
+	type?: string;
+	creationLocation?: {
+		file?: string;
+		line?: number;
+		column?: number;
+	};
+	children?: VmWidgetNode[];
+	properties?: VmWidgetProperty[];
+	renderObject?: {
+		description?: string;
+		properties?: VmWidgetProperty[];
+	};
+	hasChildren?: boolean;
+	valueId?: string;
+}
+
+interface VmWidgetProperty {
+	name?: string;
+	description?: string;
+	value?: unknown;
+	type?: string;
+	propertyType?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Helpers for parsing the widget tree
+// ---------------------------------------------------------------------------
+
+/**
+ * Extract a bounding box from a renderObject's properties.
+ * Looks for properties named "size" or "paintBounds" and parses them.
+ */
+function extractBoundingBox(node: VmWidgetNode): {
+	x: number;
+	y: number;
+	width: number;
+	height: number;
+} {
+	const defaultBox = { x: 0, y: 0, width: 0, height: 0 };
+	const renderProps = node.renderObject?.properties;
+	if (!renderProps) return defaultBox;
+
+	for (const prop of renderProps) {
+		if (!prop.description) continue;
+
+		// Match "Size(width, height)" or similar
+		if (prop.name === "size" || prop.name === "paintBounds") {
+			const sizeMatch = prop.description.match(/Size\((\d+(?:\.\d+)?),\s*(\d+(?:\.\d+)?)\)/);
+			if (sizeMatch) {
+				return {
+					x: 0,
+					y: 0,
+					width: Math.round(Number(sizeMatch[1])),
+					height: Math.round(Number(sizeMatch[2])),
+				};
+			}
+
+			// Match "Rect.fromLTRB(l, t, r, b)" pattern
+			const rectMatch = prop.description.match(
+				/Rect\.fromLTRB\((-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)\)/,
+			);
+			if (rectMatch) {
+				const l = Number(rectMatch[1]);
+				const t = Number(rectMatch[2]);
+				const r = Number(rectMatch[3]);
+				const b = Number(rectMatch[4]);
+				return {
+					x: Math.round(l),
+					y: Math.round(t),
+					width: Math.round(r - l),
+					height: Math.round(b - t),
+				};
+			}
+		}
+
+		// Match offset for position
+		if (prop.name === "offset") {
+			const offsetMatch = prop.description.match(
+				/Offset\((-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)\)/,
+			);
+			if (offsetMatch) {
+				defaultBox.x = Math.round(Number(offsetMatch[1]));
+				defaultBox.y = Math.round(Number(offsetMatch[2]));
+			}
+		}
+	}
+
+	return defaultBox;
+}
+
+/**
+ * Extract accessibility/semantics information from widget properties.
+ */
+function extractAccessibility(node: VmWidgetNode): MobileElement["accessibility"] | undefined {
+	const props = node.properties;
+	if (!props) return undefined;
+
+	let label: string | undefined;
+	let role: string | undefined;
+	let hint: string | undefined;
+	let value: string | undefined;
+	const traits: string[] = [];
+
+	for (const prop of props) {
+		const name = prop.name?.toLowerCase() ?? "";
+		const desc = prop.description ?? "";
+
+		if (name === "semanticslabel" || name === "label") {
+			label = desc || undefined;
+		} else if (name === "role" || name === "semanticsrole") {
+			role = desc || undefined;
+		} else if (name === "hint" || name === "tooltip") {
+			hint = desc || undefined;
+		} else if (name === "value" || name === "semanticsvalue") {
+			value = desc || undefined;
+		} else if (name === "enabled" && desc === "false") {
+			traits.push("disabled");
+		} else if (name === "focusable" && desc === "true") {
+			traits.push("focusable");
+		} else if (name === "checked" && desc === "true") {
+			traits.push("checked");
+		} else if (name === "selected" && desc === "true") {
+			traits.push("selected");
+		}
+	}
+
+	if (!label && !role && !hint && !value && traits.length === 0) {
+		return undefined;
+	}
+
+	return {
+		label,
+		role,
+		hint,
+		value,
+		traits: traits.length > 0 ? traits : undefined,
+	};
+}
+
+/**
+ * Extract style-like properties from widget properties.
+ */
+function extractStyleProps(node: VmWidgetNode): Record<string, unknown> | undefined {
+	const props = node.properties;
+	if (!props || props.length === 0) return undefined;
+
+	const styleNames = new Set([
+		"padding",
+		"margin",
+		"alignment",
+		"color",
+		"backgroundColor",
+		"decoration",
+		"textStyle",
+		"fontSize",
+		"fontWeight",
+		"fontFamily",
+		"borderRadius",
+		"border",
+		"constraints",
+		"width",
+		"height",
+		"flex",
+		"mainAxisAlignment",
+		"crossAxisAlignment",
+		"mainAxisSize",
+		"textAlign",
+		"overflow",
+		"opacity",
+		"elevation",
+		"shape",
+	]);
+
+	const result: Record<string, unknown> = {};
+	for (const prop of props) {
+		if (prop.name && styleNames.has(prop.name) && prop.description) {
+			result[prop.name] = prop.description;
+		}
+	}
+
+	return Object.keys(result).length > 0 ? result : undefined;
+}
+
+/**
+ * Extract text content from known text-bearing widgets.
+ */
+function extractTextContent(node: VmWidgetNode): string | undefined {
+	const textWidgets = new Set([
+		"Text",
+		"RichText",
+		"SelectableText",
+		"EditableText",
+		"TextFormField",
+		"TextField",
+	]);
+
+	const widgetName = node.description ?? "";
+	if (!textWidgets.has(widgetName)) return undefined;
+
+	const props = node.properties;
+	if (!props) return undefined;
+
+	for (const prop of props) {
+		if (prop.name === "data" && typeof prop.description === "string") {
+			return prop.description;
+		}
+	}
+
+	return undefined;
+}
+
+/**
+ * Recursively flatten the widget tree into a list of MobileElement objects.
+ */
+function flattenWidgetTree(
+	node: VmWidgetNode,
+	parentPath: string,
+	counter: { value: number },
+): MobileElement[] {
+	const elements: MobileElement[] = [];
+	const widgetName = node.description ?? "Unknown";
+	const currentPath = parentPath ? `${parentPath}/${widgetName}` : widgetName;
+
+	const id = `flutter-${counter.value}`;
+	counter.value += 1;
+
+	const boundingBox = extractBoundingBox(node);
+
+	let componentFile: string | undefined;
+	if (node.creationLocation) {
+		const loc = node.creationLocation;
+		componentFile = loc.file ? `${loc.file}${loc.line != null ? `:${loc.line}` : ""}` : undefined;
+	}
+
+	const element: MobileElement = {
+		id,
+		platform: "flutter",
+		componentPath: currentPath,
+		componentName: widgetName,
+		componentFile,
+		boundingBox,
+		styleProps: extractStyleProps(node),
+		accessibility: extractAccessibility(node),
+		textContent: extractTextContent(node),
+	};
+
+	elements.push(element);
+
+	if (node.children) {
+		for (const child of node.children) {
+			elements.push(...flattenWidgetTree(child, currentPath, counter));
+		}
+	}
+
+	return elements;
+}
+
+// ---------------------------------------------------------------------------
+// Hit-testing: find smallest element whose bounding box contains (x, y)
+// ---------------------------------------------------------------------------
+
+function hitTestElement(elements: MobileElement[], x: number, y: number): MobileElement | null {
+	let best: MobileElement | null = null;
+	let bestArea = Number.POSITIVE_INFINITY;
+
+	for (const el of elements) {
+		const bb = el.boundingBox;
+		if (bb.width <= 0 || bb.height <= 0) continue;
+
+		const inBounds = x >= bb.x && x <= bb.x + bb.width && y >= bb.y && y <= bb.y + bb.height;
+
+		if (inBounds) {
+			const area = bb.width * bb.height;
+			if (area < bestArea) {
+				bestArea = area;
+				best = el;
+			}
+		}
+	}
+
+	return best;
+}
+
+// ---------------------------------------------------------------------------
+// Helper: detect iOS simulator vs Android device
+// ---------------------------------------------------------------------------
+
+function isIosSimulatorId(deviceId: string): boolean {
+	return IOS_UDID_REGEX.test(deviceId);
+}
+
+// ---------------------------------------------------------------------------
+// FlutterBridge
+// ---------------------------------------------------------------------------
 
 export class FlutterBridge implements IPlatformBridge {
 	readonly platform = "flutter" as const;
 
-	async listDevices(): Promise<DeviceInfo[]> {
-		// TODO: Discover running Flutter apps via Dart VM Service
-		return [];
-	}
-
-	async captureScreen(_deviceId: string): Promise<Buffer> {
-		// TODO: Capture via Dart VM Service or platform-specific tools
-		throw new Error("Not implemented");
-	}
-
-	async getElementTree(_deviceId: string): Promise<MobileElement[]> {
-		// TODO: Use ext.flutter.inspector.getRootWidgetSummaryTree
-		return [];
-	}
-
-	async inspectElement(_deviceId: string, _x: number, _y: number): Promise<MobileElement | null> {
-		// TODO: Hit-test via ext.flutter.inspector.getWidgetForHitTest
-		return null;
-	}
-
+	/**
+	 * Check if the Flutter CLI is available and whether any Dart VM Service
+	 * endpoints are discoverable.
+	 */
 	async isAvailable(): Promise<boolean> {
-		// TODO: Check if Flutter daemon is running
-		return false;
+		try {
+			await execFile("flutter", ["--version"], {
+				timeout: CLI_TIMEOUT,
+			});
+			return true;
+		} catch {
+			return false;
+		}
+	}
+
+	/**
+	 * Discover connected devices via `flutter devices --machine`.
+	 * Parses the JSON output and enriches each entry with screen dimensions
+	 * obtained through platform-specific commands.
+	 */
+	async listDevices(): Promise<DeviceInfo[]> {
+		try {
+			const { stdout } = await execFile("flutter", ["devices", "--machine"], {
+				timeout: CLI_TIMEOUT,
+				maxBuffer: MAX_BUFFER,
+			});
+
+			const raw = JSON.parse(stdout) as FlutterDeviceJson[];
+			const devices: DeviceInfo[] = [];
+
+			for (const dev of raw) {
+				const isEmulator = dev.emulator;
+				const isIos = dev.targetPlatform.includes("ios");
+				const isAndroid = dev.targetPlatform.includes("android");
+
+				let osVersion = dev.sdk || "unknown";
+				let screenWidth = 0;
+				let screenHeight = 0;
+
+				if (isAndroid && !isIos) {
+					const dims = await this.getAndroidScreenSize(dev.id);
+					screenWidth = dims.width;
+					screenHeight = dims.height;
+
+					const ver = await this.getAndroidOsVersion(dev.id);
+					if (ver !== "unknown") {
+						osVersion = `Android ${ver}`;
+					}
+				} else if (isIos) {
+					const dims = this.guessIosScreenSize(dev.name);
+					screenWidth = dims.width;
+					screenHeight = dims.height;
+				}
+
+				devices.push({
+					id: dev.id,
+					name: dev.name,
+					platform: "flutter",
+					isEmulator,
+					osVersion,
+					screenWidth,
+					screenHeight,
+				});
+			}
+
+			return devices;
+		} catch {
+			return [];
+		}
+	}
+
+	/**
+	 * Capture a screenshot as a PNG buffer.
+	 * - Android devices: `adb exec-out screencap -p`
+	 * - iOS simulators: `xcrun simctl io <id> screenshot --type=png /dev/stdout`
+	 */
+	async captureScreen(deviceId: string): Promise<Buffer> {
+		if (isIosSimulatorId(deviceId)) {
+			return this.captureIosSimulatorScreen(deviceId);
+		}
+		return this.captureAndroidScreen(deviceId);
+	}
+
+	/**
+	 * Retrieve the widget tree from the Dart VM Service and flatten it
+	 * into a list of MobileElement objects.
+	 */
+	async getElementTree(deviceId: string): Promise<MobileElement[]> {
+		let ws: WebSocket | null = null;
+
+		try {
+			const vmUrl = await discoverVmServiceUrl(deviceId);
+			if (!vmUrl) return [];
+
+			ws = await connectToVmService(vmUrl);
+
+			// First, get the list of isolates to find the Flutter isolate
+			const vmResp = await callVmServiceMethod(ws, "getVM");
+			if (vmResp.error || !vmResp.result) return [];
+
+			const isolates = vmResp.result.isolates as Array<{ id: string; name: string }> | undefined;
+			if (!isolates || isolates.length === 0) return [];
+
+			// Pick the main isolate (prefer one named "main")
+			const mainIsolate = isolates.find((iso) => iso.name === "main") ?? isolates[0];
+
+			// Call the Flutter inspector extension to get the widget tree
+			const treeResp = await callVmServiceMethod(
+				ws,
+				"ext.flutter.inspector.getRootWidgetSummaryTree",
+				{
+					isolateId: mainIsolate.id,
+					groupName: "agentation-inspector",
+				},
+			);
+
+			if (treeResp.error || !treeResp.result) return [];
+
+			const rootNode = treeResp.result as unknown as VmWidgetNode;
+			if (!rootNode) return [];
+
+			const counter = { value: 0 };
+			return flattenWidgetTree(rootNode, "", counter);
+		} catch {
+			return [];
+		} finally {
+			if (ws) {
+				try {
+					ws.close();
+				} catch {
+					// ignore close errors
+				}
+			}
+		}
+	}
+
+	/**
+	 * Inspect the element at screen coordinates (x, y).
+	 * Gets the full element tree and performs a hit-test to find
+	 * the smallest bounding box containing the point.
+	 */
+	async inspectElement(deviceId: string, x: number, y: number): Promise<MobileElement | null> {
+		const elements = await this.getElementTree(deviceId);
+		return hitTestElement(elements, x, y);
+	}
+
+	// -------------------------------------------------------------------
+	// Private: Android helpers
+	// -------------------------------------------------------------------
+
+	private async captureAndroidScreen(deviceId: string): Promise<Buffer> {
+		const { stdout } = await execFile("adb", ["-s", deviceId, "exec-out", "screencap", "-p"], {
+			timeout: CLI_TIMEOUT,
+			maxBuffer: MAX_BUFFER,
+			encoding: "buffer" as unknown as string,
+		});
+
+		const buf = stdout as unknown as Buffer;
+		if (!buf || buf.length === 0) {
+			throw new Error(`Screenshot returned empty buffer for device ${deviceId}`);
+		}
+
+		return buf;
+	}
+
+	private async captureIosSimulatorScreen(deviceId: string): Promise<Buffer> {
+		const { stdout } = await execFile(
+			"xcrun",
+			["simctl", "io", deviceId, "screenshot", "--type=png", "/dev/stdout"],
+			{
+				timeout: CLI_TIMEOUT,
+				maxBuffer: MAX_BUFFER,
+				encoding: "buffer" as unknown as string,
+			},
+		);
+
+		return stdout as unknown as Buffer;
+	}
+
+	private async getAndroidScreenSize(deviceId: string): Promise<{ width: number; height: number }> {
+		try {
+			const { stdout } = await execFile("adb", ["-s", deviceId, "shell", "wm", "size"], {
+				timeout: CLI_TIMEOUT,
+			});
+			const match = stdout.match(/(\d+)x(\d+)/);
+			if (match) {
+				return {
+					width: Number(match[1]),
+					height: Number(match[2]),
+				};
+			}
+		} catch {
+			// fall through
+		}
+		return { width: 0, height: 0 };
+	}
+
+	private async getAndroidOsVersion(deviceId: string): Promise<string> {
+		try {
+			const { stdout } = await execFile(
+				"adb",
+				["-s", deviceId, "shell", "getprop", "ro.build.version.release"],
+				{ timeout: CLI_TIMEOUT },
+			);
+			return stdout.trim() || "unknown";
+		} catch {
+			return "unknown";
+		}
+	}
+
+	/**
+	 * Best-effort screen size guess for iOS simulators based on name.
+	 */
+	private guessIosScreenSize(deviceName: string): { width: number; height: number } {
+		const knownSizes: Record<string, { width: number; height: number }> = {
+			"iPhone 16 Pro Max": { width: 440, height: 956 },
+			"iPhone 16 Pro": { width: 402, height: 874 },
+			"iPhone 16 Plus": { width: 430, height: 932 },
+			"iPhone 16": { width: 393, height: 852 },
+			"iPhone 15 Pro Max": { width: 430, height: 932 },
+			"iPhone 15 Pro": { width: 393, height: 852 },
+			"iPhone 15 Plus": { width: 430, height: 932 },
+			"iPhone 15": { width: 393, height: 852 },
+			"iPhone 14 Pro Max": { width: 430, height: 932 },
+			"iPhone 14 Pro": { width: 393, height: 852 },
+			"iPhone 14 Plus": { width: 428, height: 926 },
+			"iPhone 14": { width: 390, height: 844 },
+			"iPhone SE": { width: 375, height: 667 },
+			"iPad Pro (12.9-inch)": { width: 1024, height: 1366 },
+			"iPad Pro (11-inch)": { width: 834, height: 1194 },
+			"iPad Air": { width: 820, height: 1180 },
+			"iPad mini": { width: 744, height: 1133 },
+		};
+
+		for (const [key, size] of Object.entries(knownSizes)) {
+			if (deviceName.includes(key)) return size;
+		}
+
+		return { width: 390, height: 844 };
 	}
 }

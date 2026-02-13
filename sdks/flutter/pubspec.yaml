@@ -1,0 +1,17 @@
+name: agentation_mobile
+description: In-app developer overlay for agentation-mobile. Annotate and inspect Flutter UI during development.
+version: 0.1.0
+homepage: https://github.com/andresdefi/agentation-mobile
+
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+  flutter: ">=3.10.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0

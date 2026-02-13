@@ -1,4 +1,5 @@
-// TODO: AgentationProvider — context provider for dev overlay
-// TODO: AgentationOverlay — touch-to-inspect overlay component
-// TODO: useAgentation — hook for programmatic annotation
-export {};
+export { AgentationProvider } from "./AgentationProvider";
+export type { AgentationConfig, AgentationContextValue } from "./AgentationProvider";
+export { AgentationOverlay } from "./AgentationOverlay";
+export type { AgentationOverlayProps } from "./AgentationOverlay";
+export { useAgentation } from "./useAgentation";
