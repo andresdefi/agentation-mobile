@@ -75,7 +75,7 @@ export function useAnnotations(sessionId: string | null): UseAnnotationsResult {
 		};
 	}, []);
 
-	// Subscribe to SSE for real-time updates
+	// Subscribe to SSE for real-time updates with auto-reconnect
 	useEffect(() => {
 		mountedRef.current = true;
 
@@ -83,9 +83,8 @@ export function useAnnotations(sessionId: string | null): UseAnnotationsResult {
 
 		fetchAnnotations();
 
-		const eventsUrl = getEventsUrl();
-		const eventSource = new EventSource(eventsUrl);
-		eventSourceRef.current = eventSource;
+		let reconnectDelay = 1000;
+		let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
 		const handleAnnotationEvent = (event: MessageEvent) => {
 			try {
@@ -95,7 +94,6 @@ export function useAnnotations(sessionId: string | null): UseAnnotationsResult {
 				setAnnotations((prev) => {
 					const idx = prev.findIndex((a) => a.id === annotation.id);
 					if (idx >= 0) {
-						// Detect resolution: was not resolved, now is
 						if (prev[idx].status !== "resolved" && annotation.status === "resolved") {
 							markResolved(annotation.id);
 						}
@@ -110,18 +108,38 @@ export function useAnnotations(sessionId: string | null): UseAnnotationsResult {
 			}
 		};
 
-		eventSource.addEventListener("annotation:created", handleAnnotationEvent);
-		eventSource.addEventListener("annotation:status", handleAnnotationEvent);
-		eventSource.addEventListener("annotation:reply", handleAnnotationEvent);
-		eventSource.addEventListener("annotation:updated", handleAnnotationEvent);
+		function connect() {
+			if (!mountedRef.current) return;
 
-		eventSource.onerror = () => {
-			// EventSource will automatically reconnect
-		};
+			const eventsUrl = getEventsUrl();
+			const eventSource = new EventSource(eventsUrl);
+			eventSourceRef.current = eventSource;
+
+			eventSource.addEventListener("annotation:created", handleAnnotationEvent);
+			eventSource.addEventListener("annotation:status", handleAnnotationEvent);
+			eventSource.addEventListener("annotation:reply", handleAnnotationEvent);
+			eventSource.addEventListener("annotation:updated", handleAnnotationEvent);
+
+			eventSource.onopen = () => {
+				reconnectDelay = 1000; // Reset backoff on success
+			};
+
+			eventSource.onerror = () => {
+				eventSource.close();
+				eventSourceRef.current = null;
+				if (mountedRef.current) {
+					reconnectTimer = setTimeout(connect, reconnectDelay);
+					reconnectDelay = Math.min(reconnectDelay * 2, 30000);
+				}
+			};
+		}
+
+		connect();
 
 		return () => {
 			mountedRef.current = false;
-			eventSource.close();
+			if (reconnectTimer) clearTimeout(reconnectTimer);
+			eventSourceRef.current?.close();
 			eventSourceRef.current = null;
 		};
 	}, [sessionId, fetchAnnotations, markResolved]);

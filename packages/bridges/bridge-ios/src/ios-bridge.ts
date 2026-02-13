@@ -1,6 +1,11 @@
 import { execFile as execFileCb } from "node:child_process";
+import http from "node:http";
 import { promisify } from "node:util";
-import type { DeviceInfo, IPlatformBridge } from "@agentation-mobile/bridge-core";
+import {
+	type DeviceInfo,
+	type IPlatformBridge,
+	lookupIosScreenSize,
+} from "@agentation-mobile/bridge-core";
 import type { MobileElement } from "@agentation-mobile/core";
 
 const execFile = promisify(execFileCb);
@@ -10,70 +15,6 @@ const SIMCTL_TIMEOUT = 15_000;
 
 /** Maximum buffer size (bytes) for screenshot output (~25 MB). */
 const SIMCTL_MAX_BUFFER = 25 * 1024 * 1024;
-
-/**
- * Known iOS simulator screen dimensions keyed by device model substring.
- * Used as a fallback when dynamic resolution detection is not available.
- */
-const KNOWN_SCREEN_SIZES: Record<string, { width: number; height: number }> = {
-	"iPhone 16 Pro Max": { width: 440, height: 956 },
-	"iPhone 16 Pro": { width: 402, height: 874 },
-	"iPhone 16 Plus": { width: 430, height: 932 },
-	"iPhone 16": { width: 393, height: 852 },
-	"iPhone 15 Pro Max": { width: 430, height: 932 },
-	"iPhone 15 Pro": { width: 393, height: 852 },
-	"iPhone 15 Plus": { width: 430, height: 932 },
-	"iPhone 15": { width: 393, height: 852 },
-	"iPhone 14 Pro Max": { width: 430, height: 932 },
-	"iPhone 14 Pro": { width: 393, height: 852 },
-	"iPhone 14 Plus": { width: 428, height: 926 },
-	"iPhone 14": { width: 390, height: 844 },
-	"iPhone 13 Pro Max": { width: 428, height: 926 },
-	"iPhone 13 Pro": { width: 390, height: 844 },
-	"iPhone 13 mini": { width: 375, height: 812 },
-	"iPhone 13": { width: 390, height: 844 },
-	"iPhone 12 Pro Max": { width: 428, height: 926 },
-	"iPhone 12 Pro": { width: 390, height: 844 },
-	"iPhone 12 mini": { width: 375, height: 812 },
-	"iPhone 12": { width: 390, height: 844 },
-	"iPhone SE (3rd generation)": { width: 375, height: 667 },
-	"iPhone SE (2nd generation)": { width: 375, height: 667 },
-	"iPad Pro (12.9-inch)": { width: 1024, height: 1366 },
-	"iPad Pro (11-inch)": { width: 834, height: 1194 },
-	"iPad Air": { width: 820, height: 1180 },
-	"iPad mini": { width: 744, height: 1133 },
-	iPad: { width: 810, height: 1080 },
-};
-
-/**
- * Resolve the logical screen size for a simulator by device name.
- * Tries to match the most specific device name first, then falls back
- * to partial matches, and finally returns a sensible default.
- */
-function resolveScreenSize(deviceName: string): { width: number; height: number } {
-	// Exact match first
-	if (KNOWN_SCREEN_SIZES[deviceName]) {
-		return KNOWN_SCREEN_SIZES[deviceName];
-	}
-
-	// Partial match: find the longest key that is a substring of the device name
-	let bestMatch: { width: number; height: number } | null = null;
-	let bestLength = 0;
-
-	for (const [key, size] of Object.entries(KNOWN_SCREEN_SIZES)) {
-		if (deviceName.includes(key) && key.length > bestLength) {
-			bestMatch = size;
-			bestLength = key.length;
-		}
-	}
-
-	if (bestMatch) {
-		return bestMatch;
-	}
-
-	// Default: iPhone-sized screen
-	return { width: 393, height: 852 };
-}
 
 /**
  * Extract the OS version string from a simctl runtime identifier.
@@ -281,6 +222,38 @@ function mapIosRole(role: string): string {
 }
 
 /**
+ * Map an iOS accessibility role to a SwiftUI / UIKit source type hint.
+ * Returns a string like "SwiftUI.Button | UIButton" that an agent can use
+ * to search the codebase for likely source definitions.
+ */
+function mapIosSourceType(role: string): string | undefined {
+	const sourceMappings: Record<string, string> = {
+		AXButton: "SwiftUI.Button | UIButton",
+		AXStaticText: "SwiftUI.Text | UILabel",
+		AXTextField: "SwiftUI.TextField | UITextField",
+		AXSecureTextField: "SwiftUI.SecureField | UITextField",
+		AXTextView: "SwiftUI.TextEditor | UITextView",
+		AXImage: "SwiftUI.Image | UIImageView",
+		AXCheckBox: "SwiftUI.Toggle | UISwitch",
+		AXSwitch: "SwiftUI.Toggle | UISwitch",
+		AXSlider: "SwiftUI.Slider | UISlider",
+		AXProgressIndicator: "SwiftUI.ProgressView | UIProgressView",
+		AXTable: "SwiftUI.List | UITableView",
+		AXCollectionView: "SwiftUI.LazyVGrid | UICollectionView",
+		AXScrollView: "SwiftUI.ScrollView | UIScrollView",
+		AXTabBar: "SwiftUI.TabView | UITabBarController",
+		AXTabButton: "SwiftUI.TabView | UITabBarItem",
+		AXNavigationBar: "SwiftUI.NavigationStack | UINavigationController",
+		AXToolbar: "SwiftUI.toolbar() | UIToolbar",
+		AXLink: "SwiftUI.Link | UIButton",
+		AXPopUpButton: "SwiftUI.Picker | UIPickerView",
+		AXWebView: "WKWebView",
+	};
+
+	return sourceMappings[role];
+}
+
+/**
  * Check if a point (x, y) falls within a bounding box.
  */
 function pointInBounds(
@@ -299,7 +272,7 @@ function boundingBoxArea(box: { width: number; height: number }): number {
 }
 
 // Exported for testing
-export { parseAccessibilityOutput, mapIosRole, pointInBounds, boundingBoxArea };
+export { parseAccessibilityOutput, mapIosRole, mapIosSourceType, pointInBounds, boundingBoxArea };
 export type { AccessibilityNode };
 
 export class IosBridge implements IPlatformBridge {
@@ -347,7 +320,7 @@ export class IosBridge implements IPlatformBridge {
 					if (device.state !== "Booted") continue;
 					if (device.isAvailable === false) continue;
 
-					const screenSize = resolveScreenSize(device.name);
+					const screenSize = lookupIosScreenSize(device.name);
 
 					devices.push({
 						id: device.udid,
@@ -384,7 +357,7 @@ export class IosBridge implements IPlatformBridge {
 				const name = device.deviceProperties?.name ?? "Unknown iOS Device";
 				const osVersion = device.deviceProperties?.osVersionNumber ?? "unknown";
 				const udid = device.hardwareProperties?.udid ?? device.identifier;
-				const screenSize = resolveScreenSize(name);
+				const screenSize = lookupIosScreenSize(name);
 
 				if (devices.some((d) => d.id === udid)) continue;
 
@@ -445,6 +418,28 @@ export class IosBridge implements IPlatformBridge {
 	 */
 	async getElementTree(deviceId: string): Promise<MobileElement[]> {
 		try {
+			// Try to get accessibility elements and SDK elements in parallel
+			const [accessibilityElements, sdkElements] = await Promise.all([
+				this.getAccessibilityTree(deviceId),
+				this.querySdkElements(deviceId).catch(() => null),
+			]);
+
+			// Merge SDK source locations into accessibility elements
+			if (sdkElements && sdkElements.length > 0) {
+				return this.mergeElements(accessibilityElements, sdkElements);
+			}
+
+			return accessibilityElements;
+		} catch {
+			return this.buildFallbackRoot(deviceId);
+		}
+	}
+
+	/**
+	 * Get the raw accessibility element tree (without SDK enrichment).
+	 */
+	private async getAccessibilityTree(deviceId: string): Promise<MobileElement[]> {
+		try {
 			const { stdout } = await execFile("xcrun", ["simctl", "ui", deviceId, "accessibility"], {
 				timeout: SIMCTL_TIMEOUT,
 				maxBuffer: SIMCTL_MAX_BUFFER,
@@ -461,8 +456,6 @@ export class IosBridge implements IPlatformBridge {
 
 			return elements;
 		} catch {
-			// `xcrun simctl ui` may not be available in all Xcode versions.
-			// Return a fallback root element so callers always get at least one element.
 			return this.buildFallbackRoot(deviceId);
 		}
 	}
@@ -547,6 +540,12 @@ export class IosBridge implements IPlatformBridge {
 	 * bounding box contains the given point (hit-test).
 	 */
 	async inspectElement(deviceId: string, x: number, y: number): Promise<MobileElement | null> {
+		// Try SDK hit-test first (has source locations), fall back to accessibility
+		const sdkElement = await this.querySdkElementAt(deviceId, x, y).catch(() => null);
+		if (sdkElement?.sourceLocation) {
+			return sdkElement;
+		}
+
 		const elements = await this.getElementTree(deviceId);
 
 		let bestMatch: MobileElement | null = null;
@@ -563,6 +562,85 @@ export class IosBridge implements IPlatformBridge {
 		}
 
 		return bestMatch;
+	}
+
+	async sendTap(deviceId: string, x: number, y: number): Promise<void> {
+		try {
+			await execFile(
+				"xcrun",
+				["simctl", "io", deviceId, "input", "tap", String(Math.round(x)), String(Math.round(y))],
+				{ timeout: SIMCTL_TIMEOUT },
+			);
+		} catch (err) {
+			throw new Error(
+				`sendTap failed: ${err}. Requires Xcode 15+ with 'xcrun simctl io input' support.`,
+			);
+		}
+	}
+
+	async sendKeyEvent(deviceId: string, keyCode: string): Promise<void> {
+		try {
+			await execFile("xcrun", ["simctl", "io", deviceId, "sendkey", keyCode], {
+				timeout: SIMCTL_TIMEOUT,
+			});
+		} catch (err) {
+			throw new Error(`sendKeyEvent failed: ${err}`);
+		}
+	}
+
+	async sendText(deviceId: string, text: string): Promise<void> {
+		try {
+			// Write text to simulator pasteboard via stdin, then Cmd+V paste
+			await new Promise<void>((resolve, reject) => {
+				const child = execFileCb(
+					"xcrun",
+					["simctl", "pbcopy", deviceId],
+					{ timeout: SIMCTL_TIMEOUT },
+					(err) => (err ? reject(err) : resolve()),
+				);
+				child.stdin?.write(text);
+				child.stdin?.end();
+			});
+			await execFile("xcrun", ["simctl", "io", deviceId, "sendkey", "command-v"], {
+				timeout: SIMCTL_TIMEOUT,
+			});
+		} catch (err) {
+			throw new Error(`sendText failed: ${err}`);
+		}
+	}
+
+	async sendSwipe(
+		deviceId: string,
+		fromX: number,
+		fromY: number,
+		toX: number,
+		toY: number,
+		_durationMs?: number,
+	): Promise<void> {
+		// iOS simulators have limited swipe support via simctl.
+		// We use touch event sequence: down → move → up
+		try {
+			await execFile(
+				"xcrun",
+				[
+					"simctl",
+					"io",
+					deviceId,
+					"input",
+					"swipe",
+					String(Math.round(fromX)),
+					String(Math.round(fromY)),
+					String(Math.round(toX)),
+					String(Math.round(toY)),
+				],
+				{ timeout: SIMCTL_TIMEOUT },
+			);
+		} catch {
+			throw new Error(
+				"sendSwipe is not supported on this iOS simulator version. " +
+					"Requires Xcode 15+ with 'xcrun simctl io input swipe' support.",
+			);
+		}
 	}
 
 	/**
@@ -635,6 +713,12 @@ export class IosBridge implements IPlatformBridge {
 				element.accessibility = accessibility;
 			}
 
+			// Source type hint (SwiftUI / UIKit)
+			const sourceType = mapIosSourceType(node.role);
+			if (sourceType) {
+				element.componentFile = sourceType;
+			}
+
 			// If the label looks like text content, populate textContent
 			if (node.label && node.role === "AXStaticText") {
 				element.textContent = node.label;
@@ -644,5 +728,127 @@ export class IosBridge implements IPlatformBridge {
 		}
 
 		return elements;
+	}
+
+	/**
+	 * Try to query the in-app Agentation SDK HTTP server for enriched element data.
+	 * The SDK runs on port 4748 inside the simulator. On simulators, localhost is shared,
+	 * so we can reach it directly.
+	 */
+	private async querySdkElements(deviceId: string): Promise<MobileElement[] | null> {
+		try {
+			// On iOS simulators, the app's localhost is accessible from the host
+			const body = await this.httpGet("http://127.0.0.1:4748/agentation/elements");
+			if (!body) return null;
+
+			return JSON.parse(body) as MobileElement[];
+		} catch {
+			return null;
+		}
+	}
+
+	/**
+	 * Try to query the SDK for a specific element at coordinates.
+	 */
+	private async querySdkElementAt(
+		_deviceId: string,
+		x: number,
+		y: number,
+	): Promise<MobileElement | null> {
+		try {
+			const body = await this.httpGet(`http://127.0.0.1:4748/agentation/element?x=${x}&y=${y}`);
+			if (!body) return null;
+
+			return JSON.parse(body) as MobileElement;
+		} catch {
+			return null;
+		}
+	}
+
+	/**
+	 * Merge SDK-sourced elements (with source locations) into accessibility elements.
+	 */
+	private mergeElements(
+		accessibilityElements: MobileElement[],
+		sdkElements: MobileElement[],
+	): MobileElement[] {
+		if (sdkElements.length === 0) return accessibilityElements;
+
+		const enriched = accessibilityElements.map((accEl) => {
+			const match = this.findBestSdkMatch(accEl, sdkElements);
+			if (!match) return accEl;
+
+			return {
+				...accEl,
+				sourceLocation: match.sourceLocation ?? accEl.sourceLocation,
+				componentFile: match.componentFile ?? accEl.componentFile,
+				componentName: match.componentName || accEl.componentName,
+				animations: match.animations ?? accEl.animations,
+			};
+		});
+
+		return enriched;
+	}
+
+	/**
+	 * Find the SDK element that best matches by bounding box overlap.
+	 */
+	private findBestSdkMatch(
+		target: MobileElement,
+		sdkElements: MobileElement[],
+	): MobileElement | null {
+		let bestMatch: MobileElement | null = null;
+		let bestOverlap = 0;
+
+		const tb = target.boundingBox;
+
+		for (const sdk of sdkElements) {
+			const sb = sdk.boundingBox;
+
+			const overlapX = Math.max(
+				0,
+				Math.min(tb.x + tb.width, sb.x + sb.width) - Math.max(tb.x, sb.x),
+			);
+			const overlapY = Math.max(
+				0,
+				Math.min(tb.y + tb.height, sb.y + sb.height) - Math.max(tb.y, sb.y),
+			);
+			const overlapArea = overlapX * overlapY;
+
+			const targetArea = tb.width * tb.height;
+			const sdkArea = sb.width * sb.height;
+			const minArea = Math.min(targetArea, sdkArea);
+
+			if (minArea > 0 && overlapArea / minArea > 0.5 && overlapArea > bestOverlap) {
+				bestOverlap = overlapArea;
+				bestMatch = sdk;
+			}
+		}
+
+		return bestMatch;
+	}
+
+	/**
+	 * Simple HTTP GET request with timeout.
+	 */
+	private httpGet(url: string): Promise<string | null> {
+		return new Promise((resolve) => {
+			const req = http.get(url, { timeout: 2000 }, (res) => {
+				if (res.statusCode !== 200) {
+					res.resume();
+					resolve(null);
+					return;
+				}
+				const chunks: Buffer[] = [];
+				res.on("data", (chunk: Buffer) => chunks.push(chunk));
+				res.on("end", () => resolve(Buffer.concat(chunks).toString("utf-8")));
+				res.on("error", () => resolve(null));
+			});
+			req.on("error", () => resolve(null));
+			req.on("timeout", () => {
+				req.destroy();
+				resolve(null);
+			});
+		});
 	}
 }

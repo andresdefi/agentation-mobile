@@ -26,9 +26,6 @@ importers:
       '@agentation-mobile/core':
         specifier: workspace:*
         version: link:../../core
-      fast-xml-parser:
-        specifier: ^4.5.1
-        version: 4.5.3
     devDependencies:
       '@types/node':
         specifier: ^22.10.5
@@ -42,6 +39,9 @@ importers:
       '@agentation-mobile/core':
         specifier: workspace:*
         version: link:../../core
+      fast-xml-parser:
+        specifier: ^4.5.1
+        version: 4.5.3
     devDependencies:
       '@types/node':
         specifier: ^22.10.5

@@ -29,7 +29,8 @@
 		"clean": "rm -rf dist"
 	},
 	"dependencies": {
-		"@agentation-mobile/core": "workspace:*"
+		"@agentation-mobile/core": "workspace:*",
+		"fast-xml-parser": "^4.5.1"
 	},
 	"devDependencies": {
 		"@types/node": "^22.10.5",

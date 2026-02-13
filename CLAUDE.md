@@ -19,7 +19,9 @@ pnpm monorepo with Turborepo. All TypeScript packages use tsup for bundling (dua
 - `packages/bridges/bridge-flutter` — Dart VM Service
 - `packages/bridges/bridge-ios` — xcrun simctl + accessibility
 - `sdks/react-native` — In-app dev overlay (React Native)
-- `sdks/flutter` — In-app dev overlay (Dart)
+- `sdks/flutter` — In-app dev overlay (Dart/Flutter)
+- `sdks/swift` — In-app dev overlay (Swift/SwiftUI, iOS native)
+- `sdks/kotlin` — In-app dev overlay (Kotlin/Jetpack Compose, Android native)
 
 ### Dependency Graph
 

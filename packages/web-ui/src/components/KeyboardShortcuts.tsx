@@ -3,11 +3,17 @@ interface KeyboardShortcutsProps {
 }
 
 const shortcuts = [
+	{ group: "Toolbar" },
+	{ key: "P", description: "Pause / resume animations" },
+	{ key: "H", description: "Hide / show markers" },
+	{ key: "C", description: "Copy annotations" },
+	{ key: "X", description: "Clear all annotations" },
+	{ key: "Esc", description: "Close / dismiss / clear" },
 	{ group: "Navigation" },
-	{ key: "N", description: "Next annotation" },
-	{ key: "P", description: "Previous annotation" },
+	{ key: "]", description: "Next annotation" },
+	{ key: "[", description: "Previous annotation" },
 	{ key: "R", description: "Back to list" },
-	{ key: "Esc", description: "Close / clear filters" },
+	{ key: "T", description: "Toggle elements panel" },
 	{ group: "Status Filters" },
 	{ key: "1", description: "Pending" },
 	{ key: "2", description: "Acknowledged" },
@@ -19,9 +25,7 @@ const shortcuts = [
 	{ key: "G", description: "Change" },
 	{ key: "A", description: "Approve" },
 	{ group: "Actions" },
-	{ key: "C", description: "Copy annotations" },
 	{ key: "E", description: "Export menu" },
-	{ key: "T", description: "Toggle elements panel" },
 	{ key: "?", description: "Show shortcuts" },
 ] as const;
 

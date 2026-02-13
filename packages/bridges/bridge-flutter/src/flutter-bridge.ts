@@ -1,6 +1,10 @@
 import { execFile as execFileCb } from "node:child_process";
 import { promisify } from "node:util";
-import type { DeviceInfo, IPlatformBridge } from "@agentation-mobile/bridge-core";
+import {
+	type DeviceInfo,
+	IOS_UDID_REGEX,
+	type IPlatformBridge,
+} from "@agentation-mobile/bridge-core";
 import type { MobileElement } from "@agentation-mobile/core";
 import WebSocket from "ws";
 
@@ -17,12 +21,6 @@ const WS_TIMEOUT = 8_000;
 
 /** Common Dart VM Service ports to scan when discovery fails. */
 const VM_SERVICE_PORTS = [8181, 8182, 8183, 8184, 8185];
-
-/**
- * UUID pattern used to identify iOS simulator device IDs.
- * e.g. "A1B2C3D4-E5F6-7890-ABCD-EF1234567890"
- */
-const IOS_UDID_REGEX = /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/i;
 
 // ---------------------------------------------------------------------------
 // JSON-RPC helpers for Dart VM Service
@@ -426,6 +424,73 @@ function extractTextContent(node: VmWidgetNode): string | undefined {
 }
 
 /**
+ * Detect if a widget is an animation widget and extract animation info.
+ */
+function detectFlutterAnimations(
+	node: VmWidgetNode,
+): Array<{ type: string; property: string; status?: string; duration?: number }> | undefined {
+	const widgetName = node.description ?? "";
+
+	// Map of animation widget names to their animated properties
+	const animationWidgets: Record<string, { type: string; property: string }> = {
+		AnimatedContainer: { type: "transition", property: "multiple" },
+		AnimatedOpacity: { type: "timing", property: "opacity" },
+		AnimatedPadding: { type: "timing", property: "padding" },
+		AnimatedAlign: { type: "timing", property: "alignment" },
+		AnimatedPositioned: { type: "timing", property: "position" },
+		AnimatedDefaultTextStyle: { type: "timing", property: "textStyle" },
+		AnimatedPhysicalModel: { type: "timing", property: "elevation" },
+		AnimatedCrossFade: { type: "transition", property: "crossFade" },
+		AnimatedSwitcher: { type: "transition", property: "child" },
+		AnimatedSize: { type: "timing", property: "size" },
+		FadeTransition: { type: "timing", property: "opacity" },
+		ScaleTransition: { type: "timing", property: "transform.scale" },
+		SlideTransition: { type: "timing", property: "transform.translate" },
+		RotationTransition: { type: "timing", property: "transform.rotate" },
+		SizeTransition: { type: "timing", property: "size" },
+		DecoratedBoxTransition: { type: "timing", property: "decoration" },
+		AlignTransition: { type: "timing", property: "alignment" },
+		PositionedTransition: { type: "timing", property: "position" },
+		RelativePositionedTransition: { type: "timing", property: "position" },
+		AnimatedBuilder: { type: "unknown", property: "custom" },
+		TweenAnimationBuilder: { type: "timing", property: "tween" },
+		Hero: { type: "transition", property: "transform" },
+	};
+
+	const animInfo = animationWidgets[widgetName];
+	if (!animInfo) return undefined;
+
+	// Try to extract duration from properties
+	let duration: number | undefined;
+	const props = node.properties;
+	if (props) {
+		for (const prop of props) {
+			if (prop.name === "duration" && prop.description) {
+				// Parse "0:00:00.300000" format or "300ms"
+				const msMatch = prop.description.match(/(\d+)ms/);
+				if (msMatch) {
+					duration = Number(msMatch[1]);
+				} else {
+					const timeMatch = prop.description.match(/0:00:(\d+)\.(\d+)/);
+					if (timeMatch) {
+						duration = Number(timeMatch[1]) * 1000 + Number(timeMatch[2].slice(0, 3));
+					}
+				}
+			}
+		}
+	}
+
+	return [
+		{
+			type: animInfo.type,
+			property: animInfo.property,
+			status: "running",
+			duration,
+		},
+	];
+}
+
+/**
  * Recursively flatten the widget tree into a list of MobileElement objects.
  */
 function flattenWidgetTree(
@@ -443,10 +508,20 @@ function flattenWidgetTree(
 	const boundingBox = extractBoundingBox(node);
 
 	let componentFile: string | undefined;
+	let sourceLocation: { file: string; line: number; column?: number } | undefined;
 	if (node.creationLocation) {
 		const loc = node.creationLocation;
 		componentFile = loc.file ? `${loc.file}${loc.line != null ? `:${loc.line}` : ""}` : undefined;
+		if (loc.file && loc.line != null) {
+			sourceLocation = {
+				file: loc.file,
+				line: loc.line,
+				column: typeof loc.column === "number" ? loc.column : undefined,
+			};
+		}
 	}
+
+	const animations = detectFlutterAnimations(node);
 
 	const element: MobileElement = {
 		id,
@@ -454,10 +529,12 @@ function flattenWidgetTree(
 		componentPath: currentPath,
 		componentName: widgetName,
 		componentFile,
+		sourceLocation,
 		boundingBox,
 		styleProps: extractStyleProps(node),
 		accessibility: extractAccessibility(node),
 		textContent: extractTextContent(node),
+		animations: animations as MobileElement["animations"],
 	};
 
 	elements.push(element);
@@ -761,6 +838,101 @@ export class FlutterBridge implements IPlatformBridge {
 					// ignore
 				}
 			}
+		}
+	}
+
+	async sendTap(deviceId: string, x: number, y: number): Promise<void> {
+		if (isIosSimulatorId(deviceId)) {
+			await execFile(
+				"xcrun",
+				["simctl", "io", deviceId, "input", "tap", String(Math.round(x)), String(Math.round(y))],
+				{ timeout: CLI_TIMEOUT },
+			);
+		} else {
+			await execFile(
+				"adb",
+				["-s", deviceId, "shell", "input", "tap", String(Math.round(x)), String(Math.round(y))],
+				{ timeout: CLI_TIMEOUT },
+			);
+		}
+	}
+
+	async sendSwipe(
+		deviceId: string,
+		fromX: number,
+		fromY: number,
+		toX: number,
+		toY: number,
+		durationMs = 300,
+	): Promise<void> {
+		if (isIosSimulatorId(deviceId)) {
+			await execFile(
+				"xcrun",
+				[
+					"simctl",
+					"io",
+					deviceId,
+					"input",
+					"swipe",
+					String(Math.round(fromX)),
+					String(Math.round(fromY)),
+					String(Math.round(toX)),
+					String(Math.round(toY)),
+				],
+				{ timeout: CLI_TIMEOUT },
+			);
+		} else {
+			await execFile(
+				"adb",
+				[
+					"-s",
+					deviceId,
+					"shell",
+					"input",
+					"swipe",
+					String(Math.round(fromX)),
+					String(Math.round(fromY)),
+					String(Math.round(toX)),
+					String(Math.round(toY)),
+					String(durationMs),
+				],
+				{ timeout: CLI_TIMEOUT },
+			);
+		}
+	}
+
+	async sendText(deviceId: string, text: string): Promise<void> {
+		if (isIosSimulatorId(deviceId)) {
+			await new Promise<void>((resolve, reject) => {
+				const child = execFileCb(
+					"xcrun",
+					["simctl", "pbcopy", deviceId],
+					{ timeout: CLI_TIMEOUT },
+					(err) => (err ? reject(err) : resolve()),
+				);
+				child.stdin?.write(text);
+				child.stdin?.end();
+			});
+			await execFile("xcrun", ["simctl", "io", deviceId, "sendkey", "command-v"], {
+				timeout: CLI_TIMEOUT,
+			});
+		} else {
+			const escaped = text.replace(/([\\'"$ `!&|;(){}[\]<>?*#~])/g, "\\$1").replace(/ /g, "%s");
+			await execFile("adb", ["-s", deviceId, "shell", "input", "text", escaped], {
+				timeout: CLI_TIMEOUT,
+			});
+		}
+	}
+
+	async sendKeyEvent(deviceId: string, keyCode: string): Promise<void> {
+		if (isIosSimulatorId(deviceId)) {
+			await execFile("xcrun", ["simctl", "io", deviceId, "sendkey", keyCode], {
+				timeout: CLI_TIMEOUT,
+			});
+		} else {
+			await execFile("adb", ["-s", deviceId, "shell", "input", "keyevent", keyCode], {
+				timeout: CLI_TIMEOUT,
+			});
 		}
 	}
 

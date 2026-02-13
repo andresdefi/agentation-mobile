@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { AnnotationStatus } from "./schemas/enums";
 import type { MobileAnnotation } from "./schemas/mobile-annotation";
+import type { Recording, RecordingFrame } from "./schemas/recording";
 import type { Session } from "./schemas/session";
 
 export interface CreateSessionInput {
@@ -32,10 +33,36 @@ export interface ThreadMessage {
 	timestamp: string;
 }
 
+/** Default maximum number of screenshots to retain in memory. */
+const DEFAULT_MAX_SCREENSHOTS = 100;
+
+/** Default TTL for screenshots in milliseconds (30 minutes). */
+const DEFAULT_SCREENSHOT_TTL_MS = 30 * 60 * 1000;
+
+export interface ScreenshotStoreOptions {
+	maxScreenshots?: number;
+	screenshotTtlMs?: number;
+}
+
+interface StoredScreenshot {
+	data: Buffer;
+	storedAt: number;
+}
+
 export class Store {
 	private sessions = new Map<string, Session>();
 	private annotations = new Map<string, MobileAnnotation>();
-	private screenshots = new Map<string, Buffer>();
+	private screenshots = new Map<string, StoredScreenshot>();
+	private recordings = new Map<string, Recording>();
+	private recordingFrames = new Map<string, RecordingFrame[]>();
+	private recordingScreenshotIds = new Set<string>();
+	private readonly maxScreenshots: number;
+	private readonly screenshotTtlMs: number;
+
+	constructor(options?: ScreenshotStoreOptions) {
+		this.maxScreenshots = options?.maxScreenshots ?? DEFAULT_MAX_SCREENSHOTS;
+		this.screenshotTtlMs = options?.screenshotTtlMs ?? DEFAULT_SCREENSHOT_TTL_MS;
+	}
 
 	createSession(input: CreateSessionInput): Session {
 		const now = new Date().toISOString();
@@ -156,10 +183,143 @@ export class Store {
 	}
 
 	storeScreenshot(id: string, data: Buffer): void {
-		this.screenshots.set(id, data);
+		this.evictExpiredScreenshots();
+
+		// If at capacity, evict the oldest entry
+		if (this.screenshots.size >= this.maxScreenshots) {
+			const oldestKey =
+				this.findOldestUnreferencedScreenshot() ?? this.screenshots.keys().next().value;
+			if (oldestKey) {
+				this.screenshots.delete(oldestKey);
+			}
+		}
+
+		this.screenshots.set(id, { data, storedAt: Date.now() });
 	}
 
 	getScreenshot(id: string): Buffer | undefined {
-		return this.screenshots.get(id);
+		const entry = this.screenshots.get(id);
+		if (!entry) return undefined;
+
+		// Check TTL
+		if (Date.now() - entry.storedAt > this.screenshotTtlMs) {
+			this.screenshots.delete(id);
+			return undefined;
+		}
+
+		return entry.data;
+	}
+
+	get screenshotCount(): number {
+		return this.screenshots.size;
+	}
+
+	// -----------------------------------------------------------------------
+	// Recording methods
+	// -----------------------------------------------------------------------
+
+	createRecording(deviceId: string, fps: number, sessionId?: string): Recording {
+		const recording: Recording = {
+			id: randomUUID(),
+			sessionId,
+			deviceId,
+			status: "recording",
+			fps,
+			startedAt: new Date().toISOString(),
+			frameCount: 0,
+			durationMs: 0,
+		};
+		this.recordings.set(recording.id, recording);
+		this.recordingFrames.set(recording.id, []);
+		return recording;
+	}
+
+	stopRecording(id: string): Recording | undefined {
+		const recording = this.recordings.get(id);
+		if (!recording || recording.status === "stopped") return recording;
+		recording.status = "stopped";
+		recording.stoppedAt = new Date().toISOString();
+		const frames = this.recordingFrames.get(id) ?? [];
+		recording.frameCount = frames.length;
+		if (frames.length > 0) {
+			recording.durationMs = frames[frames.length - 1].timestamp;
+		}
+		return recording;
+	}
+
+	addRecordingFrame(recordingId: string, screenshotId: string, timestamp: number): void {
+		const frames = this.recordingFrames.get(recordingId);
+		if (!frames) return;
+		const frame: RecordingFrame = {
+			id: randomUUID(),
+			recordingId,
+			timestamp,
+			screenshotId,
+		};
+		frames.push(frame);
+		// Mark this screenshot as referenced by a recording (exempt from LRU eviction)
+		this.recordingScreenshotIds.add(screenshotId);
+		// Update frame count on recording
+		const recording = this.recordings.get(recordingId);
+		if (recording) {
+			recording.frameCount = frames.length;
+			recording.durationMs = timestamp;
+		}
+	}
+
+	getRecording(id: string): Recording | undefined {
+		return this.recordings.get(id);
+	}
+
+	listRecordings(): Recording[] {
+		return [...this.recordings.values()];
+	}
+
+	getRecordingFrames(recordingId: string): RecordingFrame[] {
+		return this.recordingFrames.get(recordingId) ?? [];
+	}
+
+	getFrameAtTimestamp(recordingId: string, timestampMs: number): RecordingFrame | undefined {
+		const frames = this.recordingFrames.get(recordingId);
+		if (!frames || frames.length === 0) return undefined;
+		// Find closest frame at or before the requested timestamp
+		let best: RecordingFrame | undefined;
+		for (const frame of frames) {
+			if (frame.timestamp <= timestampMs) {
+				best = frame;
+			} else {
+				break;
+			}
+		}
+		return best ?? frames[0];
+	}
+
+	private evictExpiredScreenshots(): void {
+		const now = Date.now();
+		for (const [id, entry] of this.screenshots) {
+			if (now - entry.storedAt > this.screenshotTtlMs) {
+				this.screenshots.delete(id);
+			}
+		}
+	}
+
+	private findOldestUnreferencedScreenshot(): string | undefined {
+		const referencedIds = new Set<string>(this.recordingScreenshotIds);
+		for (const annotation of this.annotations.values()) {
+			if (annotation.screenshotId) referencedIds.add(annotation.screenshotId);
+			if (annotation.resolvedScreenshotId) referencedIds.add(annotation.resolvedScreenshotId);
+		}
+
+		let oldestKey: string | undefined;
+		let oldestTime = Number.POSITIVE_INFINITY;
+
+		for (const [id, entry] of this.screenshots) {
+			if (!referencedIds.has(id) && entry.storedAt < oldestTime) {
+				oldestTime = entry.storedAt;
+				oldestKey = id;
+			}
+		}
+
+		return oldestKey;
 	}
 }

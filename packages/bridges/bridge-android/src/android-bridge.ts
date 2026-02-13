@@ -1,8 +1,14 @@
 import { execFile as execFileCb } from "node:child_process";
+import http from "node:http";
 import { promisify } from "node:util";
-import type { DeviceInfo, IPlatformBridge } from "@agentation-mobile/bridge-core";
+import {
+	type DeviceInfo,
+	type IPlatformBridge,
+	hitTestElement,
+	parseUiAutomatorXml,
+	parseWmSize,
+} from "@agentation-mobile/bridge-core";
 import type { MobileElement } from "@agentation-mobile/core";
-import { XMLParser } from "fast-xml-parser";
 
 const execFile = promisify(execFileCb);
 
@@ -11,215 +17,6 @@ const ADB_TIMEOUT = 15_000;
 
 /** Maximum buffer size (bytes) for ADB screenshot output (~25 MB). */
 const ADB_MAX_BUFFER = 25 * 1024 * 1024;
-
-interface UiAutomatorNode {
-	"@_index"?: string;
-	"@_text"?: string;
-	"@_resource-id"?: string;
-	"@_class"?: string;
-	"@_package"?: string;
-	"@_content-desc"?: string;
-	"@_checkable"?: string;
-	"@_checked"?: string;
-	"@_clickable"?: string;
-	"@_enabled"?: string;
-	"@_focusable"?: string;
-	"@_focused"?: string;
-	"@_scrollable"?: string;
-	"@_long-clickable"?: string;
-	"@_password"?: string;
-	"@_selected"?: string;
-	"@_bounds"?: string;
-	"@_rotation"?: string;
-	node?: UiAutomatorNode | UiAutomatorNode[];
-}
-
-interface ParsedBounds {
-	x: number;
-	y: number;
-	width: number;
-	height: number;
-}
-
-/**
- * Parse UIAutomator bounds string "[x1,y1][x2,y2]" into a bounding box.
- */
-function parseBounds(bounds: string): ParsedBounds | null {
-	const match = bounds.match(/\[(\d+),(\d+)\]\[(\d+),(\d+)\]/);
-	if (!match) return null;
-
-	const x1 = Number.parseInt(match[1], 10);
-	const y1 = Number.parseInt(match[2], 10);
-	const x2 = Number.parseInt(match[3], 10);
-	const y2 = Number.parseInt(match[4], 10);
-
-	return {
-		x: x1,
-		y: y1,
-		width: x2 - x1,
-		height: y2 - y1,
-	};
-}
-
-/**
- * Derive a human-readable component name from the Android class name.
- * e.g. "android.widget.TextView" -> "TextView"
- */
-function classToComponentName(className: string): string {
-	const parts = className.split(".");
-	return parts[parts.length - 1] ?? className;
-}
-
-/**
- * Build a stable element ID from available attributes.
- */
-function buildElementId(node: UiAutomatorNode, index: number): string {
-	if (node["@_resource-id"]) {
-		return node["@_resource-id"];
-	}
-	const className = node["@_class"] ?? "unknown";
-	const bounds = node["@_bounds"] ?? "";
-	return `${className}:${bounds}:${index}`;
-}
-
-/**
- * Flatten the UIAutomator node tree into a list of MobileElement objects,
- * tracking the component path for each element.
- */
-function flattenNodes(
-	node: UiAutomatorNode,
-	parentPath: string,
-	counter: { value: number },
-): MobileElement[] {
-	const elements: MobileElement[] = [];
-	const className = node["@_class"] ?? "UnknownView";
-	const componentName = classToComponentName(className);
-	const currentPath = parentPath ? `${parentPath}/${componentName}` : componentName;
-
-	const boundsStr = node["@_bounds"];
-	if (boundsStr) {
-		const parsed = parseBounds(boundsStr);
-		if (parsed) {
-			const id = buildElementId(node, counter.value);
-			counter.value += 1;
-
-			const element: MobileElement = {
-				id,
-				platform: "android-native",
-				componentPath: currentPath,
-				componentName,
-				boundingBox: parsed,
-			};
-
-			const text = node["@_text"];
-			if (text) {
-				element.textContent = text;
-			}
-
-			const contentDesc = node["@_content-desc"];
-			const resourceId = node["@_resource-id"];
-			const pkg = node["@_package"];
-
-			if (contentDesc || resourceId || pkg) {
-				element.accessibility = {};
-				if (contentDesc) {
-					element.accessibility.label = contentDesc;
-				}
-				if (resourceId) {
-					element.accessibility.hint = resourceId;
-				}
-				if (pkg) {
-					element.accessibility.value = pkg;
-				}
-			}
-
-			// Map UIAutomator class to a semantic role
-			const roleMappings: Record<string, string> = {
-				Button: "button",
-				ImageButton: "button",
-				TextView: "text",
-				EditText: "textfield",
-				ImageView: "image",
-				CheckBox: "checkbox",
-				RadioButton: "radio",
-				Switch: "switch",
-				ToggleButton: "switch",
-				SeekBar: "slider",
-				ProgressBar: "progressbar",
-				Spinner: "combobox",
-				RecyclerView: "list",
-				ListView: "list",
-				ScrollView: "scrollbar",
-				WebView: "web",
-				TabLayout: "tablist",
-			};
-
-			const role = roleMappings[componentName];
-			if (role) {
-				if (!element.accessibility) {
-					element.accessibility = {};
-				}
-				element.accessibility.role = role;
-			}
-
-			// Collect boolean traits from UIAutomator attributes
-			const traits: string[] = [];
-			if (node["@_clickable"] === "true") traits.push("clickable");
-			if (node["@_checkable"] === "true") traits.push("checkable");
-			if (node["@_checked"] === "true") traits.push("checked");
-			if (node["@_enabled"] === "false") traits.push("disabled");
-			if (node["@_focusable"] === "true") traits.push("focusable");
-			if (node["@_focused"] === "true") traits.push("focused");
-			if (node["@_scrollable"] === "true") traits.push("scrollable");
-			if (node["@_long-clickable"] === "true") traits.push("long-clickable");
-			if (node["@_selected"] === "true") traits.push("selected");
-			if (node["@_password"] === "true") traits.push("password");
-
-			if (traits.length > 0) {
-				if (!element.accessibility) {
-					element.accessibility = {};
-				}
-				element.accessibility.traits = traits;
-			}
-
-			// Populate styleProps with the Android package info
-			if (pkg) {
-				element.styleProps = { package: pkg };
-			}
-
-			elements.push(element);
-		}
-	}
-
-	// Recurse into children
-	const children = node.node;
-	if (children) {
-		const childArray = Array.isArray(children) ? children : [children];
-		for (const child of childArray) {
-			elements.push(...flattenNodes(child, currentPath, counter));
-		}
-	}
-
-	return elements;
-}
-
-/**
- * Compute the area of a bounding box.
- */
-function boundingBoxArea(box: { width: number; height: number }): number {
-	return box.width * box.height;
-}
-
-/**
- * Check if a point (x, y) falls within a bounding box.
- */
-function pointInBounds(
-	x: number,
-	y: number,
-	box: { x: number; y: number; width: number; height: number },
-): boolean {
-	return x >= box.x && x <= box.x + box.width && y >= box.y && y <= box.y + box.height;
-}
 
 export class AndroidBridge implements IPlatformBridge {
 	readonly platform = "android-native" as const;
@@ -246,77 +43,63 @@ export class AndroidBridge implements IPlatformBridge {
 		});
 
 		const lines = stdout.split("\n").slice(1); // Skip header line
-		const devices: DeviceInfo[] = [];
+
+		// Parse device serials and static info first
+		const rawDevices: Array<{
+			serial: string;
+			name: string;
+			isEmulator: boolean;
+		}> = [];
 
 		for (const line of lines) {
 			const trimmed = line.trim();
 			if (!trimmed || trimmed.startsWith("*")) continue;
 
-			// Format: <serial> <state> <properties...>
-			// e.g. "emulator-5554   device product:sdk_gphone_x86_64 model:sdk_gphone_x86_64 device:generic_x86_64 transport_id:1"
 			const parts = trimmed.split(/\s+/);
 			if (parts.length < 2) continue;
 
 			const serial = parts[0];
 			const state = parts[1];
 
-			// Only include devices in "device" state (not offline, unauthorized, etc.)
 			if (state !== "device") continue;
 
-			// Extract model name from properties
 			const modelMatch = trimmed.match(/model:(\S+)/);
 			const deviceMatch = trimmed.match(/device:(\S+)/);
 			const name = modelMatch?.[1]?.replace(/_/g, " ") ?? deviceMatch?.[1] ?? serial;
-
 			const isEmulator = serial.startsWith("emulator-") || serial.includes("localhost:");
 
-			// Query OS version
-			let osVersion = "unknown";
-			try {
-				const { stdout: versionOut } = await execFile(
-					"adb",
-					["-s", serial, "shell", "getprop", "ro.build.version.release"],
-					{ timeout: ADB_TIMEOUT },
-				);
-				osVersion = versionOut.trim() || "unknown";
-			} catch {
-				// Silently fall back to unknown
-			}
-
-			// Query screen dimensions
-			let screenWidth = 0;
-			let screenHeight = 0;
-			try {
-				const { stdout: sizeOut } = await execFile("adb", ["-s", serial, "shell", "wm", "size"], {
-					timeout: ADB_TIMEOUT,
-				});
-				// Output format: "Physical size: 1080x1920" or "Override size: 1080x1920"
-				// We prefer override size if present, otherwise physical size
-				const sizeLines = sizeOut.trim().split("\n");
-				for (const sizeLine of sizeLines.reverse()) {
-					const sizeMatch = sizeLine.match(/(\d+)x(\d+)/);
-					if (sizeMatch) {
-						screenWidth = Number.parseInt(sizeMatch[1], 10);
-						screenHeight = Number.parseInt(sizeMatch[2], 10);
-						break;
-					}
-				}
-			} catch {
-				// Silently fall back to 0x0
-			}
-
-			devices.push({
-				id: serial,
-				name,
-				platform: "android-native",
-				isEmulator,
-				osVersion,
-				screenWidth,
-				screenHeight,
-			});
+			rawDevices.push({ serial, name, isEmulator });
 		}
 
-		return devices;
+		// Enrich all devices in parallel (OS version + screen size)
+		const enriched = await Promise.all(
+			rawDevices.map(async (dev) => {
+				const [osVersion, screen] = await Promise.all([
+					execFile("adb", ["-s", dev.serial, "shell", "getprop", "ro.build.version.release"], {
+						timeout: ADB_TIMEOUT,
+					})
+						.then(({ stdout: v }) => v.trim() || "unknown")
+						.catch(() => "unknown"),
+					execFile("adb", ["-s", dev.serial, "shell", "wm", "size"], {
+						timeout: ADB_TIMEOUT,
+					})
+						.then(({ stdout: sizeOut }) => parseWmSize(sizeOut))
+						.catch(() => ({ width: 0, height: 0 })),
+				]);
+
+				return {
+					id: dev.serial,
+					name: dev.name,
+					platform: "android-native" as const,
+					isEmulator: dev.isEmulator,
+					osVersion,
+					screenWidth: screen.width,
+					screenHeight: screen.height,
+				};
+			}),
+		);
+
+		return enriched;
 	}
 
 	/**
@@ -348,51 +131,53 @@ export class AndroidBridge implements IPlatformBridge {
 	 * of the current screen, then parses it with fast-xml-parser.
 	 */
 	async getElementTree(deviceId: string): Promise<MobileElement[]> {
+		// Try to get UIAutomator elements and SDK elements in parallel
+		const [uiAutomatorElements, sdkElements] = await Promise.all([
+			this.getUiAutomatorTree(deviceId),
+			this.querySdkElements(deviceId).catch(() => null),
+		]);
+
+		// Merge SDK source locations into UIAutomator elements
+		if (sdkElements && sdkElements.length > 0) {
+			return this.mergeElements(uiAutomatorElements, sdkElements);
+		}
+
+		return uiAutomatorElements;
+	}
+
+	/**
+	 * Get the raw UIAutomator element tree (without SDK enrichment).
+	 */
+	private async getUiAutomatorTree(deviceId: string): Promise<MobileElement[]> {
 		const { stdout } = await execFile(
 			"adb",
 			["-s", deviceId, "shell", "uiautomator", "dump", "/dev/tty"],
 			{ timeout: ADB_TIMEOUT, maxBuffer: ADB_MAX_BUFFER },
 		);
 
-		// UIAutomator prepends "UI hierchary dumped to: /dev/tty" on some versions,
-		// and the XML starts with "<?xml" — we need to extract just the XML portion.
 		const xmlStart = stdout.indexOf("<?xml");
 		if (xmlStart === -1) {
-			// Some devices output the XML without the processing instruction
 			const hierarchyStart = stdout.indexOf("<hierarchy");
 			if (hierarchyStart === -1) {
 				throw new Error(
 					`UIAutomator dump did not return valid XML for device ${deviceId}. Output: ${stdout.slice(0, 200)}`,
 				);
 			}
-			return this.parseUiAutomatorXml(stdout.slice(hierarchyStart));
+			return parseUiAutomatorXml(stdout.slice(hierarchyStart), "android-native");
 		}
 
-		return this.parseUiAutomatorXml(stdout.slice(xmlStart));
+		return parseUiAutomatorXml(stdout.slice(xmlStart), "android-native");
 	}
 
-	/**
-	 * Inspect a specific element at screen coordinates (x, y).
-	 * Gets the full element tree and finds the smallest element whose
-	 * bounding box contains the given point.
-	 */
 	async inspectElement(deviceId: string, x: number, y: number): Promise<MobileElement | null> {
-		const elements = await this.getElementTree(deviceId);
-
-		let bestMatch: MobileElement | null = null;
-		let bestArea = Number.POSITIVE_INFINITY;
-
-		for (const element of elements) {
-			if (pointInBounds(x, y, element.boundingBox)) {
-				const area = boundingBoxArea(element.boundingBox);
-				if (area < bestArea) {
-					bestArea = area;
-					bestMatch = element;
-				}
-			}
+		// Try SDK hit-test first (has source locations), fall back to UIAutomator
+		const sdkElement = await this.querySdkElementAt(deviceId, x, y).catch(() => null);
+		if (sdkElement?.sourceLocation) {
+			return sdkElement;
 		}
 
-		return bestMatch;
+		const elements = await this.getElementTree(deviceId);
+		return hitTestElement(elements, x, y);
 	}
 
 	async connectWifi(host: string, port = 5555): Promise<{ success: boolean; message: string }> {
@@ -440,22 +225,23 @@ export class AndroidBridge implements IPlatformBridge {
 
 	async pauseAnimations(deviceId: string): Promise<{ success: boolean; message: string }> {
 		try {
-			// Set all three animation scale settings to 0
-			await execFile(
-				"adb",
-				["-s", deviceId, "shell", "settings", "put", "global", "animator_duration_scale", "0"],
-				{ timeout: ADB_TIMEOUT },
-			);
-			await execFile(
-				"adb",
-				["-s", deviceId, "shell", "settings", "put", "global", "transition_animation_scale", "0"],
-				{ timeout: ADB_TIMEOUT },
-			);
-			await execFile(
-				"adb",
-				["-s", deviceId, "shell", "settings", "put", "global", "window_animation_scale", "0"],
-				{ timeout: ADB_TIMEOUT },
-			);
+			await Promise.all([
+				execFile(
+					"adb",
+					["-s", deviceId, "shell", "settings", "put", "global", "animator_duration_scale", "0"],
+					{ timeout: ADB_TIMEOUT },
+				),
+				execFile(
+					"adb",
+					["-s", deviceId, "shell", "settings", "put", "global", "transition_animation_scale", "0"],
+					{ timeout: ADB_TIMEOUT },
+				),
+				execFile(
+					"adb",
+					["-s", deviceId, "shell", "settings", "put", "global", "window_animation_scale", "0"],
+					{ timeout: ADB_TIMEOUT },
+				),
+			]);
 			return { success: true, message: "All animations disabled" };
 		} catch (err) {
 			return { success: false, message: `${err}` };
@@ -464,58 +250,211 @@ export class AndroidBridge implements IPlatformBridge {
 
 	async resumeAnimations(deviceId: string): Promise<{ success: boolean; message: string }> {
 		try {
-			await execFile(
-				"adb",
-				["-s", deviceId, "shell", "settings", "put", "global", "animator_duration_scale", "1"],
-				{ timeout: ADB_TIMEOUT },
-			);
-			await execFile(
-				"adb",
-				["-s", deviceId, "shell", "settings", "put", "global", "transition_animation_scale", "1"],
-				{ timeout: ADB_TIMEOUT },
-			);
-			await execFile(
-				"adb",
-				["-s", deviceId, "shell", "settings", "put", "global", "window_animation_scale", "1"],
-				{ timeout: ADB_TIMEOUT },
-			);
+			await Promise.all([
+				execFile(
+					"adb",
+					["-s", deviceId, "shell", "settings", "put", "global", "animator_duration_scale", "1"],
+					{ timeout: ADB_TIMEOUT },
+				),
+				execFile(
+					"adb",
+					["-s", deviceId, "shell", "settings", "put", "global", "transition_animation_scale", "1"],
+					{ timeout: ADB_TIMEOUT },
+				),
+				execFile(
+					"adb",
+					["-s", deviceId, "shell", "settings", "put", "global", "window_animation_scale", "1"],
+					{ timeout: ADB_TIMEOUT },
+				),
+			]);
 			return { success: true, message: "All animations restored to normal" };
 		} catch (err) {
 			return { success: false, message: `${err}` };
 		}
 	}
 
+	async sendTap(deviceId: string, x: number, y: number): Promise<void> {
+		await execFile(
+			"adb",
+			["-s", deviceId, "shell", "input", "tap", String(Math.round(x)), String(Math.round(y))],
+			{ timeout: ADB_TIMEOUT },
+		);
+	}
+
+	async sendSwipe(
+		deviceId: string,
+		fromX: number,
+		fromY: number,
+		toX: number,
+		toY: number,
+		durationMs = 300,
+	): Promise<void> {
+		await execFile(
+			"adb",
+			[
+				"-s",
+				deviceId,
+				"shell",
+				"input",
+				"swipe",
+				String(Math.round(fromX)),
+				String(Math.round(fromY)),
+				String(Math.round(toX)),
+				String(Math.round(toY)),
+				String(durationMs),
+			],
+			{ timeout: ADB_TIMEOUT },
+		);
+	}
+
+	async sendText(deviceId: string, text: string): Promise<void> {
+		// Escape special shell characters for adb shell input text
+		const escaped = text.replace(/([\\'"$ `!&|;(){}[\]<>?*#~])/g, "\\$1").replace(/ /g, "%s");
+		await execFile("adb", ["-s", deviceId, "shell", "input", "text", escaped], {
+			timeout: ADB_TIMEOUT,
+		});
+	}
+
+	async sendKeyEvent(deviceId: string, keyCode: string): Promise<void> {
+		await execFile("adb", ["-s", deviceId, "shell", "input", "keyevent", keyCode], {
+			timeout: ADB_TIMEOUT,
+		});
+	}
+
 	/**
-	 * Parse the UIAutomator XML dump into a flat list of MobileElement objects.
+	 * Try to query the in-app Agentation SDK HTTP server for enriched element data.
+	 * The SDK runs on port 4748 inside the app. We use ADB port forwarding to reach it.
+	 * Returns null if the SDK server is not running.
 	 */
-	private parseUiAutomatorXml(xml: string): MobileElement[] {
-		const parser = new XMLParser({
-			ignoreAttributes: false,
-			attributeNamePrefix: "@_",
-			// Ensure single-child nodes are not collapsed into non-array
-			isArray: (name) => name === "node",
+	private async querySdkElements(deviceId: string): Promise<MobileElement[] | null> {
+		try {
+			// Set up port forwarding (idempotent — re-running is safe)
+			await execFile("adb", ["-s", deviceId, "forward", "tcp:4748", "tcp:4748"], {
+				timeout: ADB_TIMEOUT,
+			});
+
+			const body = await this.httpGet("http://127.0.0.1:4748/agentation/elements");
+			if (!body) return null;
+
+			const elements = JSON.parse(body) as MobileElement[];
+			return elements;
+		} catch {
+			return null;
+		}
+	}
+
+	/**
+	 * Try to query the SDK for a specific element at coordinates.
+	 */
+	private async querySdkElementAt(
+		deviceId: string,
+		x: number,
+		y: number,
+	): Promise<MobileElement | null> {
+		try {
+			await execFile("adb", ["-s", deviceId, "forward", "tcp:4748", "tcp:4748"], {
+				timeout: ADB_TIMEOUT,
+			});
+
+			const body = await this.httpGet(`http://127.0.0.1:4748/agentation/element?x=${x}&y=${y}`);
+			if (!body) return null;
+
+			return JSON.parse(body) as MobileElement;
+		} catch {
+			return null;
+		}
+	}
+
+	/**
+	 * Merge SDK-sourced elements (with source locations) into UIAutomator elements
+	 * (with accurate bounding boxes). SDK data wins for source info, UIAutomator
+	 * wins for bounding box accuracy and element coverage.
+	 */
+	private mergeElements(
+		uiAutomatorElements: MobileElement[],
+		sdkElements: MobileElement[],
+	): MobileElement[] {
+		if (sdkElements.length === 0) return uiAutomatorElements;
+
+		// Build a spatial index of SDK elements for matching
+		const enriched = uiAutomatorElements.map((uiEl) => {
+			// Find the best matching SDK element by bounding box overlap
+			const match = this.findBestSdkMatch(uiEl, sdkElements);
+			if (!match) return uiEl;
+
+			return {
+				...uiEl,
+				sourceLocation: match.sourceLocation ?? uiEl.sourceLocation,
+				componentFile: match.componentFile ?? uiEl.componentFile,
+				componentName: match.componentName || uiEl.componentName,
+				animations: match.animations ?? uiEl.animations,
+			};
 		});
 
-		const parsed = parser.parse(xml);
+		return enriched;
+	}
 
-		// The hierarchy root may be at parsed.hierarchy or parsed["hierarchy"]
-		const hierarchy = parsed?.hierarchy;
-		if (!hierarchy) {
-			return [];
+	/**
+	 * Find the SDK element that best matches a UIAutomator element by bounding box overlap.
+	 */
+	private findBestSdkMatch(
+		target: MobileElement,
+		sdkElements: MobileElement[],
+	): MobileElement | null {
+		let bestMatch: MobileElement | null = null;
+		let bestOverlap = 0;
+
+		const tb = target.boundingBox;
+
+		for (const sdk of sdkElements) {
+			const sb = sdk.boundingBox;
+
+			// Calculate intersection
+			const overlapX = Math.max(
+				0,
+				Math.min(tb.x + tb.width, sb.x + sb.width) - Math.max(tb.x, sb.x),
+			);
+			const overlapY = Math.max(
+				0,
+				Math.min(tb.y + tb.height, sb.y + sb.height) - Math.max(tb.y, sb.y),
+			);
+			const overlapArea = overlapX * overlapY;
+
+			// Require at least 50% overlap relative to the smaller element
+			const targetArea = tb.width * tb.height;
+			const sdkArea = sb.width * sb.height;
+			const minArea = Math.min(targetArea, sdkArea);
+
+			if (minArea > 0 && overlapArea / minArea > 0.5 && overlapArea > bestOverlap) {
+				bestOverlap = overlapArea;
+				bestMatch = sdk;
+			}
 		}
 
-		const elements: MobileElement[] = [];
-		const counter = { value: 0 };
+		return bestMatch;
+	}
 
-		// The hierarchy contains one or more top-level "node" elements
-		const topNodes = hierarchy.node;
-		if (!topNodes) return [];
-
-		const nodeArray = Array.isArray(topNodes) ? topNodes : [topNodes];
-		for (const node of nodeArray) {
-			elements.push(...flattenNodes(node, "", counter));
-		}
-
-		return elements;
+	/**
+	 * Simple HTTP GET request with timeout.
+	 */
+	private httpGet(url: string): Promise<string | null> {
+		return new Promise((resolve) => {
+			const req = http.get(url, { timeout: 2000 }, (res) => {
+				if (res.statusCode !== 200) {
+					res.resume();
+					resolve(null);
+					return;
+				}
+				const chunks: Buffer[] = [];
+				res.on("data", (chunk: Buffer) => chunks.push(chunk));
+				res.on("end", () => resolve(Buffer.concat(chunks).toString("utf-8")));
+				res.on("error", () => resolve(null));
+			});
+			req.on("error", () => resolve(null));
+			req.on("timeout", () => {
+				req.destroy();
+				resolve(null);
+			});
+		});
 	}
 }

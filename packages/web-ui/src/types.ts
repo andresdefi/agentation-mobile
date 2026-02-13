@@ -37,17 +37,33 @@ export interface Accessibility {
 	traits?: string[];
 }
 
+export interface SourceLocation {
+	file: string;
+	line: number;
+	column?: number;
+}
+
+export interface AnimationInfo {
+	type: "timing" | "spring" | "decay" | "transition" | "keyframe" | "unknown";
+	property: string;
+	status?: "running" | "paused" | "completed";
+	duration?: number;
+	sourceLocation?: SourceLocation;
+}
+
 export interface MobileElement {
 	id: string;
 	platform: Platform;
 	componentPath: string;
 	componentName: string;
 	componentFile?: string;
+	sourceLocation?: SourceLocation;
 	boundingBox: BoundingBox;
 	styleProps?: Record<string, unknown>;
 	accessibility?: Accessibility;
 	textContent?: string;
 	nearbyText?: string;
+	animations?: AnimationInfo[];
 }
 
 export interface SelectedArea {

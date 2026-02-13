@@ -12,6 +12,7 @@ interface ThreadViewProps {
 		annotationId: string,
 		action: "acknowledge" | "resolve" | "dismiss",
 	) => Promise<void>;
+	onRequestAction?: (annotationId: string) => Promise<void>;
 }
 
 function formatTime(timestamp: string): string {
@@ -52,7 +53,13 @@ function intentColor(intent: string): string {
 	}
 }
 
-export function ThreadView({ annotation, onReply, onClose, onUpdateStatus }: ThreadViewProps) {
+export function ThreadView({
+	annotation,
+	onReply,
+	onClose,
+	onUpdateStatus,
+	onRequestAction,
+}: ThreadViewProps) {
 	const [replyText, setReplyText] = useState("");
 	const [sending, setSending] = useState(false);
 
@@ -151,6 +158,16 @@ export function ThreadView({ annotation, onReply, onClose, onUpdateStatus }: Thr
 					>
 						Dismiss
 					</button>
+					{onRequestAction && (
+						<button
+							type="button"
+							onClick={() => onRequestAction(annotation.id)}
+							className="ml-auto rounded-md bg-purple-500/10 px-2.5 py-1 text-xs font-medium text-purple-400 transition-colors hover:bg-purple-500/20"
+							title="Request AI agent to act on this annotation"
+						>
+							Request Agent
+						</button>
+					)}
 				</div>
 			)}
 

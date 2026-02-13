@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import type { IPlatformBridge } from "@agentation-mobile/bridge-core";
 import { createServer } from "@agentation-mobile/server";
 import { Command } from "commander";
 
@@ -16,10 +17,15 @@ program
 	.description("Start the agentation-mobile server and web UI")
 	.option("-p, --port <port>", "Server port", "4747")
 	.option("-w, --webhook <url...>", "Webhook URLs for annotation events")
+	.option("--webhook-secret <secret>", "HMAC secret for webhook signature verification")
 	.action(async (options) => {
 		const bridges = await loadBridges();
+		const secret = options.webhookSecret as string | undefined;
 		const webhooks =
-			(options.webhook as string[] | undefined)?.map((url: string) => ({ url })) ?? [];
+			(options.webhook as string[] | undefined)?.map((url: string) => ({
+				url,
+				secret,
+			})) ?? [];
 		const server = createServer({
 			port: Number(options.port),
 			bridges,
@@ -28,7 +34,7 @@ program
 		await server.start();
 		console.log(`Bridges loaded: ${bridges.map((b) => b.platform).join(", ") || "none"}`);
 		if (webhooks.length > 0) {
-			console.log(`Webhooks: ${webhooks.map((w) => w.url).join(", ")}`);
+			console.log(`Webhooks: ${webhooks.map((w) => w.url).join(", ")}${secret ? " (signed)" : ""}`);
 		}
 	});
 
@@ -39,14 +45,15 @@ program
 	.option("--port <port>", "HTTP transport port", "4748")
 	.action(async (options) => {
 		const { Store } = await import("@agentation-mobile/core");
-		const { EventBus } = await import("@agentation-mobile/server");
+		const { EventBus, RecordingEngine } = await import("@agentation-mobile/server");
 		const { createMcpServer } = await import("@agentation-mobile/mcp");
 
 		const store = new Store();
 		const eventBus = new EventBus();
 		const bridges = await loadBridges();
+		const recordingEngine = new RecordingEngine(store, bridges);
 
-		const server = createMcpServer({ store, eventBus, bridges });
+		const server = createMcpServer({ store, eventBus, bridges, recordingEngine });
 
 		if (options.transport === "http") {
 			const { StreamableHTTPServerTransport } = await import(
@@ -93,14 +100,21 @@ program
 			console.log("No platform bridges available. Is ADB installed?");
 			return;
 		}
-		for (const bridge of bridges) {
-			const devices = await bridge.listDevices();
+		const results = await Promise.allSettled(
+			bridges.map(async (bridge) => ({
+				platform: bridge.platform,
+				devices: await bridge.listDevices(),
+			})),
+		);
+		for (const result of results) {
+			if (result.status !== "fulfilled") continue;
+			const { platform, devices } = result.value;
 			if (devices.length === 0) {
-				console.log(`[${bridge.platform}] No devices found`);
+				console.log(`[${platform}] No devices found`);
 			} else {
 				for (const device of devices) {
 					console.log(
-						`[${bridge.platform}] ${device.name} (${device.id}) ${device.isEmulator ? "[emulator]" : ""} ${device.screenWidth}x${device.screenHeight}`,
+						`[${platform}] ${device.name} (${device.id}) ${device.isEmulator ? "[emulator]" : ""} ${device.screenWidth}x${device.screenHeight}`,
 					);
 				}
 			}
@@ -119,39 +133,8 @@ program
 			process.exit(1);
 		}
 
-		let targetDeviceId = options.device as string | undefined;
-		let targetBridge = bridges[0];
-
-		if (targetDeviceId) {
-			let found = false;
-			for (const bridge of bridges) {
-				const devices = await bridge.listDevices();
-				if (devices.some((d) => d.id === targetDeviceId)) {
-					targetBridge = bridge;
-					found = true;
-					break;
-				}
-			}
-			if (!found) {
-				console.error(`Device not found: ${targetDeviceId}`);
-				process.exit(1);
-			}
-		} else {
-			for (const bridge of bridges) {
-				const devices = await bridge.listDevices();
-				if (devices.length > 0) {
-					targetBridge = bridge;
-					targetDeviceId = devices[0].id;
-					break;
-				}
-			}
-			if (!targetDeviceId) {
-				console.error("No devices found.");
-				process.exit(1);
-			}
-		}
-
-		const buffer = await targetBridge.captureScreen(targetDeviceId);
+		const { bridge, deviceId } = await resolveDevice(bridges, options.device as string | undefined);
+		const buffer = await bridge.captureScreen(deviceId);
 		const outputPath = options.output ?? `screenshot-${Date.now()}.png`;
 		await writeFile(outputPath, buffer);
 		console.log(`Screenshot saved to ${outputPath}`);
@@ -170,39 +153,8 @@ program
 			process.exit(1);
 		}
 
-		let targetDeviceId = options.device as string | undefined;
-		let targetBridge = bridges[0];
-
-		if (targetDeviceId) {
-			let found = false;
-			for (const bridge of bridges) {
-				const devices = await bridge.listDevices();
-				if (devices.some((d) => d.id === targetDeviceId)) {
-					targetBridge = bridge;
-					found = true;
-					break;
-				}
-			}
-			if (!found) {
-				console.error(`Device not found: ${targetDeviceId}`);
-				process.exit(1);
-			}
-		} else {
-			for (const bridge of bridges) {
-				const devices = await bridge.listDevices();
-				if (devices.length > 0) {
-					targetBridge = bridge;
-					targetDeviceId = devices[0].id;
-					break;
-				}
-			}
-			if (!targetDeviceId) {
-				console.error("No devices found.");
-				process.exit(1);
-			}
-		}
-
-		const element = await targetBridge.inspectElement(targetDeviceId, x, y);
+		const { bridge, deviceId } = await resolveDevice(bridges, options.device as string | undefined);
+		const element = await bridge.inspectElement(deviceId, x, y);
 		if (!element) {
 			console.log("No element found at the given coordinates.");
 		} else {
@@ -502,4 +454,38 @@ async function loadBridges() {
 		/* not available */
 	}
 	return bridges;
+}
+
+interface ResolvedDevice {
+	bridge: IPlatformBridge;
+	deviceId: string;
+}
+
+async function resolveDevice(
+	bridges: IPlatformBridge[],
+	requestedId?: string,
+): Promise<ResolvedDevice> {
+	const results = await Promise.allSettled(
+		bridges.map(async (bridge) => {
+			const devices = await bridge.listDevices();
+			return { bridge, devices };
+		}),
+	);
+	for (const result of results) {
+		if (result.status !== "fulfilled") continue;
+		const { bridge, devices } = result.value;
+		if (requestedId) {
+			if (devices.some((d) => d.id === requestedId)) {
+				return { bridge, deviceId: requestedId };
+			}
+		} else if (devices.length > 0) {
+			return { bridge, deviceId: devices[0].id };
+		}
+	}
+	if (requestedId) {
+		console.error(`Device not found: ${requestedId}`);
+	} else {
+		console.error("No devices found.");
+	}
+	process.exit(1);
 }

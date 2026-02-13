@@ -266,6 +266,9 @@ class AgentationState extends State<AgentationProvider> {
       lines.add(ref);
       lines.add('   ${a.comment}');
       lines.add('   Status: ${a.status.name} | Position: ${a.x.toStringAsFixed(1)}%, ${a.y.toStringAsFixed(1)}%');
+      if (a.selectedText != null) {
+        lines.add('   Text: "${a.selectedText}"');
+      }
       lines.add('');
     }
 

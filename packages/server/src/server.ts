@@ -1,12 +1,16 @@
 import { type Server as HttpServer, createServer as createHttpServer } from "node:http";
-import type { DeviceInfo, IPlatformBridge } from "@agentation-mobile/bridge-core";
+import type { IPlatformBridge } from "@agentation-mobile/bridge-core";
 import { Store, exportToJson, exportToMarkdown } from "@agentation-mobile/core";
 import cors from "cors";
 import express, { type Express } from "express";
 import { WebSocket, WebSocketServer } from "ws";
+import { findBridgeForDevice } from "./bridge-cache";
 import { EventBus } from "./event-bus";
+import { RecordingEngine } from "./recording-engine";
 import { createAnnotationRoutes } from "./routes/annotations";
 import { createDeviceRoutes } from "./routes/devices";
+import { createInputRoutes } from "./routes/input";
+import { createRecordingRoutes } from "./routes/recordings";
 import { createSessionRoutes } from "./routes/sessions";
 import { createSSERouter } from "./routes/sse";
 import { ScrcpyStream } from "./scrcpy-stream";
@@ -47,10 +51,14 @@ export function createServer(config: ServerConfig = {}): Server {
 		res.json({ status: "ok", version: "0.1.0" });
 	});
 
+	const recordingEngine = new RecordingEngine(store, bridges);
+
 	// API routes
 	app.use("/api/sessions", createSessionRoutes(store, eventBus));
 	app.use("/api/annotations", createAnnotationRoutes(store, eventBus));
 	app.use("/api/devices", createDeviceRoutes(bridges));
+	app.use("/api/devices", createInputRoutes(bridges));
+	app.use("/api/recordings", createRecordingRoutes(store, recordingEngine, eventBus));
 	app.use("/api/events", createSSERouter(eventBus));
 
 	// Export endpoint
@@ -248,6 +256,45 @@ export function createServer(config: ServerConfig = {}): Server {
 
 		startCapture();
 
+		// Handle incoming input messages for low-latency remote interaction
+		ws.on("message", async (data) => {
+			if (data instanceof Buffer && data[0] === 0x7b) {
+				// Starts with '{' — likely JSON
+			} else if (typeof data !== "string") {
+				return; // Ignore non-JSON binary messages
+			}
+			try {
+				const msg = JSON.parse(typeof data === "string" ? data : data.toString("utf-8"));
+				const bridge = await findBridgeForDevice(bridges, deviceId);
+				if (!bridge) return;
+				switch (msg.type) {
+					case "tap":
+						if (bridge.sendTap) await bridge.sendTap(deviceId, msg.x, msg.y);
+						break;
+					case "swipe":
+						if (bridge.sendSwipe) {
+							await bridge.sendSwipe(
+								deviceId,
+								msg.fromX,
+								msg.fromY,
+								msg.toX,
+								msg.toY,
+								msg.durationMs,
+							);
+						}
+						break;
+					case "text":
+						if (bridge.sendText) await bridge.sendText(deviceId, msg.text);
+						break;
+					case "key":
+						if (bridge.sendKeyEvent) await bridge.sendKeyEvent(deviceId, msg.keyCode);
+						break;
+				}
+			} catch {
+				// Ignore malformed messages
+			}
+		});
+
 		ws.on("close", () => {
 			if (stream) {
 				stream.stop();
@@ -280,25 +327,9 @@ export function createServer(config: ServerConfig = {}): Server {
 				});
 			}),
 		stop: () => {
+			recordingEngine.stopAll();
 			wss.close();
 			httpServer.close();
 		},
 	};
-}
-
-async function findBridgeForDevice(
-	bridges: IPlatformBridge[],
-	deviceId: string,
-): Promise<IPlatformBridge | undefined> {
-	for (const bridge of bridges) {
-		try {
-			const devices = await bridge.listDevices();
-			if (devices.some((d: DeviceInfo) => d.id === deviceId)) {
-				return bridge;
-			}
-		} catch {
-			// skip unavailable bridges
-		}
-	}
-	return undefined;
 }

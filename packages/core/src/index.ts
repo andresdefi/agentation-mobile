@@ -1,4 +1,11 @@
-export { MobileElementSchema, type MobileElement } from "./schemas/mobile-element";
+export {
+	AnimationInfoSchema,
+	MobileElementSchema,
+	SourceLocationSchema,
+	type AnimationInfo,
+	type MobileElement,
+	type SourceLocation,
+} from "./schemas/mobile-element";
 export { MobileAnnotationSchema, type MobileAnnotation } from "./schemas/mobile-annotation";
 export {
 	SessionSchema,
@@ -16,6 +23,13 @@ export {
 	AnnotationSeveritySchema,
 	AnnotationStatusSchema,
 } from "./schemas/enums";
+export {
+	RecordingSchema,
+	RecordingFrameSchema,
+	type Recording,
+	type RecordingFrame,
+	type RecordingStatus,
+} from "./schemas/recording";
 export { Store } from "./store";
 export type { CreateSessionInput, CreateAnnotationInput, ThreadMessage } from "./store";
 export {
@@ -23,6 +37,7 @@ export {
 	exportToMarkdown,
 	exportToAgentMarkdown,
 	exportWithDetailLevel,
+	formatElementName,
 	formatGitHubIssueBody,
 } from "./export";
 export type { DetailLevel, ExportData } from "./export";

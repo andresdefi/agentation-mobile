@@ -30,8 +30,7 @@
 	},
 	"dependencies": {
 		"@agentation-mobile/core": "workspace:*",
-		"@agentation-mobile/bridge-core": "workspace:*",
-		"fast-xml-parser": "^4.5.1"
+		"@agentation-mobile/bridge-core": "workspace:*"
 	},
 	"devDependencies": {
 		"@types/node": "^22.10.5",

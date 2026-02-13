@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { Store } from "@agentation-mobile/core";
-import { EventBus } from "@agentation-mobile/server";
+import { EventBus, RecordingEngine } from "@agentation-mobile/server";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { createMcpServer } from "./mcp-server.js";
 
@@ -25,7 +25,8 @@ async function main() {
 		/* bridge not available */
 	}
 
-	const server = createMcpServer({ store, eventBus, bridges });
+	const recordingEngine = new RecordingEngine(store, bridges);
+	const server = createMcpServer({ store, eventBus, bridges, recordingEngine });
 	const transport = new StdioServerTransport();
 	await server.connect(transport);
 }

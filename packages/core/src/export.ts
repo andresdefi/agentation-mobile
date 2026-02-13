@@ -1,7 +1,17 @@
 import type { MobileAnnotation } from "./schemas/mobile-annotation";
+import type { MobileElement } from "./schemas/mobile-element";
 import type { Session } from "./schemas/session";
 
 export type DetailLevel = "compact" | "standard" | "detailed" | "forensic";
+
+/** Returns a human-readable display name for an element, e.g. `Button "Submit"` */
+export function formatElementName(element: MobileElement): string {
+	const name = element.componentName;
+	const text = element.textContent || element.accessibility?.label || element.nearbyText || null;
+	if (!text) return name;
+	const truncated = text.length > 30 ? `${text.slice(0, 27)}...` : text;
+	return `${name} "${truncated}"`;
+}
 
 export interface ExportData {
 	session?: Session;
@@ -78,55 +88,39 @@ export function exportToMarkdown(annotations: MobileAnnotation[], session?: Sess
 }
 
 /**
- * Compact, greppable markdown format optimized for AI agents.
+ * Clean markdown format optimized for AI agents.
  * Designed to be pasted into any AI tool (ChatGPT, Claude, etc.)
  */
 export function exportToAgentMarkdown(annotations: MobileAnnotation[], session?: Session): string {
 	const lines: string[] = [];
 
 	if (session) {
-		lines.push(`# ${session.name} — ${annotations.length} annotations`);
-		lines.push(`Platform: ${session.platform} | Device: ${session.deviceId}`);
+		lines.push(`## Screen Feedback: ${session.name} (${session.platform})`);
+		lines.push(`**Screen:** ${session.deviceId}`);
 	} else {
-		lines.push(`# ${annotations.length} annotations`);
+		lines.push("## Screen Feedback");
 	}
 	lines.push("");
 
 	for (let i = 0; i < annotations.length; i++) {
 		const a = annotations[i];
 
-		// Source ref line: "1. [fix/important] Button (src/screens/Login.tsx)"
-		let ref = `${i + 1}. [${a.intent}/${a.severity}]`;
-		if (a.element?.componentName) {
-			ref += ` ${a.element.componentName}`;
-			if (a.element.componentFile) {
-				ref += ` (${a.element.componentFile})`;
-			} else if (a.element.componentPath) {
-				ref += ` > ${a.element.componentPath}`;
+		const elementName = a.element
+			? formatElementName(a.element)
+			: `Point ${a.x.toFixed(0)}%, ${a.y.toFixed(0)}%`;
+		lines.push(`### ${i + 1}. ${elementName}`);
+
+		if (a.element?.componentPath) {
+			lines.push(`**Component:** ${a.element.componentPath}`);
+		}
+		if (a.element?.componentFile) {
+			let source = a.element.componentFile;
+			if (a.element.sourceLocation) {
+				source += `:${a.element.sourceLocation.line}`;
 			}
+			lines.push(`**Source:** ${source}`);
 		}
-		lines.push(ref);
-
-		// Comment
-		lines.push(`   ${a.comment}`);
-
-		// Status + position on same line
-		let posLine = `   Status: ${a.status} | Position: ${a.x.toFixed(1)}%, ${a.y.toFixed(1)}%`;
-		if (a.selectedArea) {
-			posLine += ` | Area: ${a.selectedArea.width.toFixed(0)}%x${a.selectedArea.height.toFixed(0)}%`;
-		}
-		lines.push(posLine);
-
-		if (a.selectedText) {
-			lines.push(`   Text: "${a.selectedText}"`);
-		}
-
-		// Thread replies (compact)
-		if (a.thread.length > 0) {
-			for (const msg of a.thread) {
-				lines.push(`   > ${msg.role}: ${msg.content}`);
-			}
-		}
+		lines.push(`**Feedback:** ${a.comment}`);
 
 		lines.push("");
 	}

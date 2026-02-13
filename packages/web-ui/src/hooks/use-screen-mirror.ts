@@ -1,10 +1,24 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { getWebSocketUrl } from "../api";
+
+export interface InputMessage {
+	type: "tap" | "swipe" | "text" | "key";
+	x?: number;
+	y?: number;
+	fromX?: number;
+	fromY?: number;
+	toX?: number;
+	toY?: number;
+	durationMs?: number;
+	text?: string;
+	keyCode?: string;
+}
 
 interface UseScreenMirrorResult {
 	frameUrl: string | null;
 	connected: boolean;
 	error: string | null;
+	sendInput: (msg: InputMessage) => void;
 }
 
 export function useScreenMirror(deviceId: string | null): UseScreenMirrorResult {
@@ -68,5 +82,12 @@ export function useScreenMirror(deviceId: string | null): UseScreenMirrorResult 
 		};
 	}, [deviceId]);
 
-	return { frameUrl, connected, error };
+	const sendInput = useCallback((msg: InputMessage) => {
+		const ws = wsRef.current;
+		if (ws && ws.readyState === WebSocket.OPEN) {
+			ws.send(JSON.stringify(msg));
+		}
+	}, []);
+
+	return { frameUrl, connected, error, sendInput };
 }

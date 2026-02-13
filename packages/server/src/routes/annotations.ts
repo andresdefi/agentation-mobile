@@ -69,7 +69,7 @@ export function createAnnotationRoutes(store: Store, eventBus: EventBus): Router
 			selectedText,
 		});
 
-		eventBus.emit("annotation:created", annotation);
+		eventBus.emit("annotation:created", annotation, annotation.sessionId);
 		res.status(201).json(annotation);
 	});
 
@@ -80,7 +80,7 @@ export function createAnnotationRoutes(store: Store, eventBus: EventBus): Router
 			res.status(404).json({ error: "Annotation not found" });
 			return;
 		}
-		eventBus.emit("annotation:status", annotation);
+		eventBus.emit("annotation:status", annotation, annotation.sessionId);
 		res.json(annotation);
 	});
 
@@ -91,7 +91,7 @@ export function createAnnotationRoutes(store: Store, eventBus: EventBus): Router
 			res.status(404).json({ error: "Annotation not found" });
 			return;
 		}
-		eventBus.emit("annotation:status", annotation);
+		eventBus.emit("annotation:status", annotation, annotation.sessionId);
 		res.json(annotation);
 	});
 
@@ -102,8 +102,24 @@ export function createAnnotationRoutes(store: Store, eventBus: EventBus): Router
 			res.status(404).json({ error: "Annotation not found" });
 			return;
 		}
-		eventBus.emit("annotation:status", annotation);
+		eventBus.emit("annotation:status", annotation, annotation.sessionId);
 		res.json(annotation);
+	});
+
+	// Request agent action
+	router.post("/:id/request-action", (req, res) => {
+		const annotation = store.getAnnotation(req.params.id);
+		if (!annotation) {
+			res.status(404).json({ error: "Annotation not found" });
+			return;
+		}
+		const { prompt } = req.body;
+		eventBus.emit(
+			"action.requested",
+			{ annotationId: annotation.id, annotation, prompt: prompt || null },
+			annotation.sessionId,
+		);
+		res.json({ requested: true, annotationId: annotation.id });
 	});
 
 	// Reply to thread
@@ -122,7 +138,7 @@ export function createAnnotationRoutes(store: Store, eventBus: EventBus): Router
 			res.status(404).json({ error: "Annotation not found" });
 			return;
 		}
-		eventBus.emit("annotation:reply", annotation);
+		eventBus.emit("annotation:reply", annotation, annotation.sessionId);
 		res.json(annotation);
 	});
 

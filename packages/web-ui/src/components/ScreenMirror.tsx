@@ -1,10 +1,10 @@
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { TextRegion } from "../hooks/use-ocr";
-import type { MobileAnnotation, SelectedArea } from "../types";
-import { cn } from "../utils";
+import type { MobileAnnotation, MobileElement, SelectedArea } from "../types";
+import { cn, getElementDisplayName, hitTestElement } from "../utils";
 
-export type InteractionMode = "point" | "area" | "text";
+export type InteractionMode = "point" | "area" | "text" | "remote";
 
 interface ScreenMirrorProps {
 	frameUrl: string | null;
@@ -16,10 +16,18 @@ interface ScreenMirrorProps {
 	interactionMode: InteractionMode;
 	textRegions?: TextRegion[];
 	ocrLoading?: boolean;
-	onClickScreen: (x: number, y: number) => void;
+	markersHidden?: boolean;
+	overrideFrameUrl?: string | null;
+	elements?: MobileElement[];
+	screenWidth?: number;
+	screenHeight?: number;
+	pendingElement?: MobileElement | null;
+	onClickScreen: (x: number, y: number, anchorX: number, anchorY: number) => void;
 	onAreaSelect: (area: SelectedArea) => void;
 	onTextSelect: (region: TextRegion) => void;
 	onSelectAnnotation: (annotation: MobileAnnotation) => void;
+	onRemoteTap?: (xPct: number, yPct: number) => void;
+	onRemoteSwipe?: (fromXPct: number, fromYPct: number, toXPct: number, toYPct: number) => void;
 }
 
 function pinColor(status: string): string {
@@ -126,19 +134,42 @@ export function ScreenMirror({
 	interactionMode,
 	textRegions,
 	ocrLoading,
+	markersHidden,
+	overrideFrameUrl,
+	elements,
+	screenWidth,
+	screenHeight,
+	pendingElement,
 	onClickScreen,
 	onAreaSelect,
 	onTextSelect,
 	onSelectAnnotation,
+	onRemoteTap,
+	onRemoteSwipe,
 }: ScreenMirrorProps) {
 	const imageRef = useRef<HTMLImageElement>(null);
 	const containerRef = useRef<HTMLDivElement>(null);
 	const [hoveredPin, setHoveredPin] = useState<string | null>(null);
 
+	// Hover highlight state
+	const [hoveredElement, setHoveredElement] = useState<MobileElement | null>(null);
+	const [mousePos, setMousePos] = useState<{ x: number; y: number } | null>(null);
+	const rafRef = useRef<number | null>(null);
+
+	// Cancel pending RAF on unmount
+	useEffect(() => {
+		return () => {
+			if (rafRef.current) cancelAnimationFrame(rafRef.current);
+		};
+	}, []);
+
 	// Drag state for area selection
 	const [dragStart, setDragStart] = useState<{ x: number; y: number } | null>(null);
 	const [dragCurrent, setDragCurrent] = useState<{ x: number; y: number } | null>(null);
 	const isDragging = dragStart !== null && dragCurrent !== null;
+
+	// Remote mode: swipe gesture tracking
+	const [remoteSwipeStart, setRemoteSwipeStart] = useState<{ x: number; y: number } | null>(null);
 
 	const getPercentCoords = useCallback(
 		(e: React.MouseEvent<HTMLDivElement>): { x: number; y: number } | null => {
@@ -158,14 +189,21 @@ export function ScreenMirror({
 	const handleClick = useCallback(
 		(e: React.MouseEvent<HTMLDivElement>) => {
 			if (interactionMode === "area") return;
+			if (interactionMode === "remote") return; // remote uses mouseDown/mouseUp
 			const coords = getPercentCoords(e);
-			if (coords) onClickScreen(coords.x, coords.y);
+			if (coords) onClickScreen(coords.x, coords.y, e.clientX, e.clientY);
 		},
 		[interactionMode, onClickScreen, getPercentCoords],
 	);
 
 	const handleMouseDown = useCallback(
 		(e: React.MouseEvent<HTMLDivElement>) => {
+			if (interactionMode === "remote") {
+				e.preventDefault();
+				const coords = getPercentCoords(e);
+				if (coords) setRemoteSwipeStart(coords);
+				return;
+			}
 			if (interactionMode !== "area") return;
 			e.preventDefault();
 			const coords = getPercentCoords(e);
@@ -179,28 +217,84 @@ export function ScreenMirror({
 
 	const handleMouseMove = useCallback(
 		(e: React.MouseEvent<HTMLDivElement>) => {
-			if (!dragStart) return;
-			const coords = getPercentCoords(e);
-			if (coords) setDragCurrent(coords);
+			// Drag update for area mode (not throttled — needs immediate feedback)
+			if (dragStart) {
+				const coords = getPercentCoords(e);
+				if (coords) setDragCurrent(coords);
+				return;
+			}
+
+			// Hover hit-testing throttled to once per frame
+			if (
+				interactionMode !== "remote" &&
+				elements &&
+				elements.length > 0 &&
+				screenWidth &&
+				screenHeight
+			) {
+				const clientX = e.clientX;
+				const clientY = e.clientY;
+				if (rafRef.current) cancelAnimationFrame(rafRef.current);
+				rafRef.current = requestAnimationFrame(() => {
+					const img = imageRef.current;
+					if (!img) return;
+					const rect = img.getBoundingClientRect();
+					const xPct = Math.max(0, Math.min(100, ((clientX - rect.left) / rect.width) * 100));
+					const yPct = Math.max(0, Math.min(100, ((clientY - rect.top) / rect.height) * 100));
+					const hit = hitTestElement(elements, xPct, yPct, screenWidth, screenHeight);
+					setHoveredElement(hit);
+					setMousePos({ x: clientX, y: clientY });
+				});
+			}
 		},
-		[dragStart, getPercentCoords],
+		[dragStart, interactionMode, elements, screenWidth, screenHeight, getPercentCoords],
 	);
 
-	const handleMouseUp = useCallback(() => {
-		if (!dragStart || !dragCurrent) return;
-		const x = Math.min(dragStart.x, dragCurrent.x);
-		const y = Math.min(dragStart.y, dragCurrent.y);
-		const width = Math.abs(dragCurrent.x - dragStart.x);
-		const height = Math.abs(dragCurrent.y - dragStart.y);
+	const handleMouseUp = useCallback(
+		(e: React.MouseEvent<HTMLDivElement>) => {
+			// Remote mode: tap or swipe
+			if (interactionMode === "remote" && remoteSwipeStart) {
+				const coords = getPercentCoords(e);
+				if (coords) {
+					const dx = Math.abs(coords.x - remoteSwipeStart.x);
+					const dy = Math.abs(coords.y - remoteSwipeStart.y);
+					if (dx < 2 && dy < 2) {
+						// Tap (minimal movement)
+						onRemoteTap?.(coords.x, coords.y);
+					} else {
+						// Swipe
+						onRemoteSwipe?.(remoteSwipeStart.x, remoteSwipeStart.y, coords.x, coords.y);
+					}
+				}
+				setRemoteSwipeStart(null);
+				return;
+			}
 
-		setDragStart(null);
-		setDragCurrent(null);
+			if (!dragStart || !dragCurrent) return;
+			const x = Math.min(dragStart.x, dragCurrent.x);
+			const y = Math.min(dragStart.y, dragCurrent.y);
+			const width = Math.abs(dragCurrent.x - dragStart.x);
+			const height = Math.abs(dragCurrent.y - dragStart.y);
 
-		// Only create area if it's at least 2% in both dimensions (ignore tiny clicks)
-		if (width >= 2 && height >= 2) {
-			onAreaSelect({ x, y, width, height });
-		}
-	}, [dragStart, dragCurrent, onAreaSelect]);
+			setDragStart(null);
+			setDragCurrent(null);
+
+			// Only create area if it's at least 2% in both dimensions (ignore tiny clicks)
+			if (width >= 2 && height >= 2) {
+				onAreaSelect({ x, y, width, height });
+			}
+		},
+		[
+			interactionMode,
+			remoteSwipeStart,
+			dragStart,
+			dragCurrent,
+			getPercentCoords,
+			onRemoteTap,
+			onRemoteSwipe,
+			onAreaSelect,
+		],
+	);
 
 	// Calculate drag rect for rendering
 	const dragRect = isDragging
@@ -306,7 +400,7 @@ export function ScreenMirror({
 						<div
 							className={cn(
 								"absolute inset-0 z-10",
-								interactionMode === "area" ? "cursor-crosshair" : "cursor-crosshair",
+								interactionMode === "remote" ? "cursor-pointer" : "cursor-crosshair",
 							)}
 							role="button"
 							tabIndex={0}
@@ -314,13 +408,56 @@ export function ScreenMirror({
 							onMouseDown={handleMouseDown}
 							onMouseMove={handleMouseMove}
 							onMouseUp={handleMouseUp}
-							onMouseLeave={handleMouseUp}
+							onMouseLeave={(e) => {
+								handleMouseUp(e);
+								setHoveredElement(null);
+								setMousePos(null);
+							}}
 							onKeyDown={(e) => {
 								if (e.key === "Enter" || e.key === " ") {
 									handleClick(e as unknown as React.MouseEvent<HTMLDivElement>);
 								}
 							}}
 						/>
+
+						{/* Hover highlight rectangle */}
+						{hoveredElement?.boundingBox && screenWidth && screenHeight && !pendingElement && (
+							<div
+								className="pointer-events-none absolute z-15 border-2 border-blue-400 bg-blue-400/10"
+								style={{
+									left: `${(hoveredElement.boundingBox.x / screenWidth) * 100}%`,
+									top: `${(hoveredElement.boundingBox.y / screenHeight) * 100}%`,
+									width: `${(hoveredElement.boundingBox.width / screenWidth) * 100}%`,
+									height: `${(hoveredElement.boundingBox.height / screenHeight) * 100}%`,
+								}}
+							/>
+						)}
+
+						{/* Pending annotation element highlight (stays visible while popup is open) */}
+						{pendingElement?.boundingBox && screenWidth && screenHeight && (
+							<div
+								className="pointer-events-none absolute z-15 border-2 border-blue-400 bg-blue-400/10"
+								style={{
+									left: `${(pendingElement.boundingBox.x / screenWidth) * 100}%`,
+									top: `${(pendingElement.boundingBox.y / screenHeight) * 100}%`,
+									width: `${(pendingElement.boundingBox.width / screenWidth) * 100}%`,
+									height: `${(pendingElement.boundingBox.height / screenHeight) * 100}%`,
+								}}
+							/>
+						)}
+
+						{/* Hover tooltip — positioned above cursor like Agentation web */}
+						{hoveredElement && mousePos && !pendingElement && (
+							<div
+								className="pointer-events-none fixed z-50 max-w-xs rounded-lg bg-neutral-900 px-3 py-1.5 text-xs text-neutral-100 shadow-lg"
+								style={{
+									left: Math.max(8, Math.min(mousePos.x, window.innerWidth - 100)),
+									top: Math.max(8, mousePos.y - 32),
+								}}
+							>
+								{getElementDisplayName(hoveredElement)}
+							</div>
+						)}
 
 						{/* Active drag selection rectangle */}
 						{dragRect && (
@@ -336,31 +473,32 @@ export function ScreenMirror({
 						)}
 
 						{/* Area overlays for annotations with selectedArea */}
-						{annotations.map((annotation) =>
-							annotation.selectedArea ? (
-								<button
-									key={`area-${annotation.id}`}
-									type="button"
-									className={cn(
-										"absolute z-15 border-2 border-dashed transition-colors",
-										selectedAnnotationId === annotation.id
-											? "border-blue-400 bg-blue-400/15"
-											: "border-neutral-400/50 bg-neutral-400/5 hover:border-neutral-300/70 hover:bg-neutral-300/10",
-									)}
-									style={{
-										left: `${annotation.selectedArea.x}%`,
-										top: `${annotation.selectedArea.y}%`,
-										width: `${annotation.selectedArea.width}%`,
-										height: `${annotation.selectedArea.height}%`,
-									}}
-									onClick={(e) => {
-										e.stopPropagation();
-										onSelectAnnotation(annotation);
-									}}
-									aria-label={`Area annotation: ${annotation.comment}`}
-								/>
-							) : null,
-						)}
+						{!markersHidden &&
+							annotations.map((annotation) =>
+								annotation.selectedArea ? (
+									<button
+										key={`area-${annotation.id}`}
+										type="button"
+										className={cn(
+											"absolute z-15 border-2 border-dashed transition-colors",
+											selectedAnnotationId === annotation.id
+												? "border-blue-400 bg-blue-400/15"
+												: "border-neutral-400/50 bg-neutral-400/5 hover:border-neutral-300/70 hover:bg-neutral-300/10",
+										)}
+										style={{
+											left: `${annotation.selectedArea.x}%`,
+											top: `${annotation.selectedArea.y}%`,
+											width: `${annotation.selectedArea.width}%`,
+											height: `${annotation.selectedArea.height}%`,
+										}}
+										onClick={(e) => {
+											e.stopPropagation();
+											onSelectAnnotation(annotation);
+										}}
+										aria-label={`Area annotation: ${annotation.comment}`}
+									/>
+								) : null,
+							)}
 
 						{/* OCR loading indicator */}
 						{ocrLoading && (
@@ -397,65 +535,68 @@ export function ScreenMirror({
 
 						<img
 							ref={imageRef}
-							src={frameUrl}
+							src={overrideFrameUrl ?? frameUrl}
 							alt="Device screen mirror"
 							className="block max-h-[calc(100dvh-8rem)] rounded-lg object-contain shadow-lg"
 							draggable={false}
 						/>
 
 						{/* Annotation pins */}
-						{annotations.map((annotation, idx) => {
-							const isResolved = recentlyResolved?.has(annotation.id);
-							const isSelected = selectedAnnotationId === annotation.id;
+						{!markersHidden &&
+							annotations.map((annotation, idx) => {
+								const isResolved = recentlyResolved?.has(annotation.id);
+								const isSelected = selectedAnnotationId === annotation.id;
 
-							if (isResolved) {
+								if (isResolved) {
+									return (
+										<ResolvedPin
+											key={annotation.id}
+											annotation={annotation}
+											index={idx + 1}
+											isSelected={isSelected}
+											onSelect={() => onSelectAnnotation(annotation)}
+										/>
+									);
+								}
+
 								return (
-									<ResolvedPin
+									<button
+										type="button"
 										key={annotation.id}
-										annotation={annotation}
-										index={idx + 1}
-										isSelected={isSelected}
-										onSelect={() => onSelectAnnotation(annotation)}
-									/>
-								);
-							}
+										onClick={(e) => {
+											e.stopPropagation();
+											onSelectAnnotation(annotation);
+										}}
+										onMouseEnter={() => setHoveredPin(annotation.id)}
+										onMouseLeave={() => setHoveredPin(null)}
+										className={cn(
+											"absolute z-20 flex size-6 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border-2 text-xs font-bold text-white shadow-md transition-transform",
+											pinColor(annotation.status),
+											isSelected && "scale-125 ring-2 ring-white/30",
+										)}
+										style={{
+											left: `${annotation.x}%`,
+											top: `${annotation.y}%`,
+										}}
+										aria-label={`Annotation: ${annotation.comment}`}
+									>
+										{idx + 1}
 
-							return (
-								<button
-									type="button"
-									key={annotation.id}
-									onClick={(e) => {
-										e.stopPropagation();
-										onSelectAnnotation(annotation);
-									}}
-									onMouseEnter={() => setHoveredPin(annotation.id)}
-									onMouseLeave={() => setHoveredPin(null)}
-									className={cn(
-										"absolute z-20 flex size-6 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border-2 text-xs font-bold text-white shadow-md transition-transform",
-										pinColor(annotation.status),
-										isSelected && "scale-125 ring-2 ring-white/30",
-									)}
-									style={{
-										left: `${annotation.x}%`,
-										top: `${annotation.y}%`,
-									}}
-									aria-label={`Annotation: ${annotation.comment}`}
-								>
-									{idx + 1}
-
-									{/* Tooltip on hover */}
-									{hoveredPin === annotation.id && (
-										<div className="absolute bottom-full left-1/2 z-30 mb-2 w-48 -translate-x-1/2 rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-2 shadow-lg">
-											<p className="line-clamp-2 text-xs text-neutral-200">{annotation.comment}</p>
-											<div className="mt-1 flex items-center gap-2 text-xs text-neutral-500">
-												<span className="capitalize">{annotation.intent}</span>
-												<span>{annotation.severity}</span>
+										{/* Tooltip on hover */}
+										{hoveredPin === annotation.id && (
+											<div className="absolute bottom-full left-1/2 z-30 mb-2 w-48 -translate-x-1/2 rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-2 shadow-lg">
+												<p className="line-clamp-2 text-xs text-neutral-200">
+													{annotation.comment}
+												</p>
+												<div className="mt-1 flex items-center gap-2 text-xs text-neutral-500">
+													<span className="capitalize">{annotation.intent}</span>
+													<span>{annotation.severity}</span>
+												</div>
 											</div>
-										</div>
-									)}
-								</button>
-							);
-						})}
+										)}
+									</button>
+								);
+							})}
 					</>
 				)}
 			</div>

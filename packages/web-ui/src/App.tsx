@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiFetch } from "./api";
 import { AnnotationFilters, type Filters } from "./components/AnnotationFilters";
 import { AnnotationForm } from "./components/AnnotationForm";
@@ -7,12 +7,17 @@ import { type DeviceTab, DeviceTabs } from "./components/DeviceTabs";
 import { ElementTreePanel } from "./components/ElementTreePanel";
 import { ExportMenu } from "./components/ExportMenu";
 import { KeyboardShortcuts } from "./components/KeyboardShortcuts";
+import { RecordingControls } from "./components/RecordingControls";
 import { type InteractionMode, ScreenMirror } from "./components/ScreenMirror";
+import { SettingsPanel } from "./components/SettingsPanel";
 import { ThreadView } from "./components/ThreadView";
+import { Timeline } from "./components/Timeline";
+import { Toolbar } from "./components/Toolbar";
 import { useAnnotations } from "./hooks/use-annotations";
 import { useDevices } from "./hooks/use-devices";
 import { useElementTree } from "./hooks/use-element-tree";
 import { type TextRegion, useOcr } from "./hooks/use-ocr";
+import { useRecording } from "./hooks/use-recording";
 import { useScreenMirror } from "./hooks/use-screen-mirror";
 import { useSessions } from "./hooks/use-sessions";
 import type {
@@ -24,7 +29,7 @@ import type {
 	MobileElement,
 	SelectedArea,
 } from "./types";
-import { cn } from "./utils";
+import { cn, getElementDisplayName } from "./utils";
 
 export function App() {
 	// Theme state — light mode by default
@@ -38,10 +43,10 @@ export function App() {
 		localStorage.setItem("agentation-theme", darkMode ? "dark" : "light");
 	}, [darkMode]);
 
-	// Device state
-	const { devices, loading: devicesLoading } = useDevices();
+	// Device & tab state
 	const [tabs, setTabs] = useState<DeviceTab[]>([]);
 	const [activeTabIndex, setActiveTabIndex] = useState(0);
+	const { devices, loading: devicesLoading } = useDevices({ enabled: tabs.length === 0 });
 
 	// Derive active device/session from tabs
 	const activeTab = tabs[activeTabIndex] ?? null;
@@ -62,7 +67,12 @@ export function App() {
 	} = useAnnotations(activeSessionId);
 
 	// Screen mirror
-	const { frameUrl, connected, error: mirrorError } = useScreenMirror(selectedDevice?.id ?? null);
+	const {
+		frameUrl,
+		connected,
+		error: mirrorError,
+		sendInput,
+	} = useScreenMirror(selectedDevice?.id ?? null);
 
 	// Element tree
 	const {
@@ -75,10 +85,24 @@ export function App() {
 	// OCR
 	const { regions: textRegions, loading: ocrLoading, runOcr, clear: clearOcr } = useOcr();
 
+	// Recording
+	const {
+		recording,
+		frames,
+		isRecording,
+		elapsedMs,
+		start: startRecording,
+		stop: stopRecording,
+		getFrameUrl,
+	} = useRecording();
+	const [overrideFrameUrl, setOverrideFrameUrl] = useState<string | null>(null);
+
 	// UI state
 	const [clickCoords, setClickCoords] = useState<{
 		x: number;
 		y: number;
+		anchorX: number;
+		anchorY: number;
 		element?: MobileElement | null;
 		inspecting?: boolean;
 		selectedArea?: SelectedArea;
@@ -99,6 +123,8 @@ export function App() {
 	const [showShortcuts, setShowShortcuts] = useState(false);
 	const [interactionMode, setInteractionMode] = useState<InteractionMode>("point");
 	const [animationsPaused, setAnimationsPaused] = useState(false);
+	const [markersHidden, setMarkersHidden] = useState(false);
+	const [settingsOpen, setSettingsOpen] = useState(false);
 
 	// Filtered annotations
 	const filteredAnnotations = useMemo(() => {
@@ -111,9 +137,13 @@ export function App() {
 	}, [annotations, filters]);
 
 	// Keep selectedAnnotation synced with live data
-	const liveSelectedAnnotation = selectedAnnotation
-		? (annotations.find((a) => a.id === selectedAnnotation.id) ?? selectedAnnotation)
-		: null;
+	const liveSelectedAnnotation = useMemo(
+		() =>
+			selectedAnnotation
+				? (annotations.find((a) => a.id === selectedAnnotation.id) ?? selectedAnnotation)
+				: null,
+		[annotations, selectedAnnotation],
+	);
 
 	// Extract text regions from element tree (more accurate than OCR when available)
 	const elementTextRegions = useMemo(() => {
@@ -172,28 +202,33 @@ export function App() {
 		if (annotations.length === 0) return;
 
 		const lines: string[] = [];
-		lines.push(`# ${annotations.length} annotations`);
+
+		// Header with device info
+		const deviceName = selectedDevice?.name ?? "Unknown Device";
+		const platform = selectedDevice?.platform ?? "unknown";
+		const screenW = selectedDevice?.screenWidth ?? 0;
+		const screenH = selectedDevice?.screenHeight ?? 0;
+		lines.push(`## Screen Feedback: ${deviceName} (${platform})`);
+		lines.push(`**Screen:** ${screenW}x${screenH}`);
 		lines.push("");
 
 		for (let i = 0; i < annotations.length; i++) {
 			const a = annotations[i];
-			let ref = `${i + 1}. [${a.intent}/${a.severity}]`;
-			if (a.element?.componentName) {
-				ref += ` ${a.element.componentName}`;
-				if (a.element.componentFile) {
-					ref += ` (${a.element.componentFile})`;
-				} else if (a.element.componentPath) {
-					ref += ` > ${a.element.componentPath}`;
-				}
+			const elementName = a.element
+				? getElementDisplayName(a.element)
+				: `Point ${a.x.toFixed(0)}%, ${a.y.toFixed(0)}%`;
+			lines.push(`### ${i + 1}. ${elementName}`);
+			if (a.element?.componentPath) {
+				lines.push(`**Component:** ${a.element.componentPath}`);
 			}
-			lines.push(ref);
-			lines.push(`   ${a.comment}`);
-			lines.push(`   Status: ${a.status} | Position: ${a.x.toFixed(1)}%, ${a.y.toFixed(1)}%`);
-			if (a.thread.length > 0) {
-				for (const msg of a.thread) {
-					lines.push(`   > ${msg.role}: ${msg.content}`);
+			if (a.element?.componentFile) {
+				let source = a.element.componentFile;
+				if (a.element.sourceLocation) {
+					source += `:${a.element.sourceLocation.line}`;
 				}
+				lines.push(`**Source:** ${source}`);
 			}
+			lines.push(`**Feedback:** ${a.comment}`);
 			lines.push("");
 		}
 
@@ -207,156 +242,7 @@ export function App() {
 			setCopyFeedback("Copy failed");
 			setTimeout(() => setCopyFeedback(null), 2000);
 		}
-	}, [annotations]);
-
-	// Keyboard shortcuts
-	useEffect(() => {
-		const handler = (e: KeyboardEvent) => {
-			if (e.key === "Escape") {
-				if (showShortcuts) {
-					setShowShortcuts(false);
-				} else if (exportMenuOpen) {
-					setExportMenuOpen(false);
-				} else if (clickCoords) {
-					setClickCoords(null);
-				} else if (sidebarView === "thread") {
-					setSidebarView("list");
-					setSelectedAnnotation(null);
-				} else if (filters.status || filters.intent || filters.severity) {
-					setFilters({ status: null, intent: null, severity: null });
-				}
-				return;
-			}
-
-			const target = e.target as HTMLElement;
-			if (
-				target.tagName === "INPUT" ||
-				target.tagName === "TEXTAREA" ||
-				target.tagName === "SELECT"
-			)
-				return;
-
-			if (e.key === "?") {
-				setShowShortcuts((v) => !v);
-				return;
-			}
-
-			if (e.key === "1") {
-				setFilters((f) => ({
-					...f,
-					status: f.status === "pending" ? null : ("pending" as AnnotationStatus),
-				}));
-				return;
-			}
-			if (e.key === "2") {
-				setFilters((f) => ({
-					...f,
-					status: f.status === "acknowledged" ? null : ("acknowledged" as AnnotationStatus),
-				}));
-				return;
-			}
-			if (e.key === "3") {
-				setFilters((f) => ({
-					...f,
-					status: f.status === "resolved" ? null : ("resolved" as AnnotationStatus),
-				}));
-				return;
-			}
-			if (e.key === "4") {
-				setFilters((f) => ({
-					...f,
-					status: f.status === "dismissed" ? null : ("dismissed" as AnnotationStatus),
-				}));
-				return;
-			}
-
-			if (e.key === "f" && !e.metaKey && !e.ctrlKey) {
-				setFilters((prev) => ({
-					...prev,
-					intent: prev.intent === "fix" ? null : ("fix" as AnnotationIntent),
-				}));
-				return;
-			}
-			if (e.key === "q" && !e.metaKey && !e.ctrlKey) {
-				setFilters((prev) => ({
-					...prev,
-					intent: prev.intent === "question" ? null : ("question" as AnnotationIntent),
-				}));
-				return;
-			}
-			if (e.key === "g" && !e.metaKey && !e.ctrlKey) {
-				setFilters((prev) => ({
-					...prev,
-					intent: prev.intent === "change" ? null : ("change" as AnnotationIntent),
-				}));
-				return;
-			}
-			if (e.key === "a" && !e.metaKey && !e.ctrlKey) {
-				setFilters((prev) => ({
-					...prev,
-					intent: prev.intent === "approve" ? null : ("approve" as AnnotationIntent),
-				}));
-				return;
-			}
-
-			if (e.key === "r" && !e.metaKey && !e.ctrlKey) {
-				if (sidebarView === "thread") {
-					setSidebarView("list");
-					setSelectedAnnotation(null);
-				}
-				return;
-			}
-			if (e.key === "c" && !e.metaKey && !e.ctrlKey) {
-				handleCopyAnnotations();
-				return;
-			}
-			if (e.key === "e" && !e.metaKey && !e.ctrlKey) {
-				setExportMenuOpen((v) => !v);
-				return;
-			}
-			if (e.key === "t" && !e.metaKey && !e.ctrlKey) {
-				if (sidebarView === "thread") {
-					setSidebarView("list");
-					setSelectedAnnotation(null);
-				}
-				setSidebarTab((tab) => (tab === "elements" ? "annotations" : "elements"));
-				return;
-			}
-
-			if (e.key === "n" && !e.metaKey && !e.ctrlKey) {
-				if (filteredAnnotations.length === 0) return;
-				const currentIdx = liveSelectedAnnotation
-					? filteredAnnotations.findIndex((ann) => ann.id === liveSelectedAnnotation.id)
-					: -1;
-				const nextIdx = currentIdx + 1 >= filteredAnnotations.length ? 0 : currentIdx + 1;
-				setSelectedAnnotation(filteredAnnotations[nextIdx]);
-				setSidebarView("thread");
-				return;
-			}
-			if (e.key === "p" && !e.metaKey && !e.ctrlKey) {
-				if (filteredAnnotations.length === 0) return;
-				const currentIdx = liveSelectedAnnotation
-					? filteredAnnotations.findIndex((ann) => ann.id === liveSelectedAnnotation.id)
-					: -1;
-				const prevIdx = currentIdx <= 0 ? filteredAnnotations.length - 1 : currentIdx - 1;
-				setSelectedAnnotation(filteredAnnotations[prevIdx]);
-				setSidebarView("thread");
-				return;
-			}
-		};
-
-		window.addEventListener("keydown", handler);
-		return () => window.removeEventListener("keydown", handler);
-	}, [
-		clickCoords,
-		sidebarView,
-		filters,
-		handleCopyAnnotations,
-		filteredAnnotations,
-		liveSelectedAnnotation,
-		showShortcuts,
-		exportMenuOpen,
-	]);
+	}, [annotations, selectedDevice]);
 
 	// Handle adding a device (creates a new tab)
 	const handleAddDevice = useCallback(
@@ -415,9 +301,9 @@ export function App() {
 
 	// Handle clicking on the screen mirror
 	const handleScreenClick = useCallback(
-		async (x: number, y: number) => {
+		async (x: number, y: number, anchorX: number, anchorY: number) => {
 			if (!activeSessionId || !selectedDevice) return;
-			setClickCoords({ x, y, inspecting: true });
+			setClickCoords({ x, y, anchorX, anchorY, inspecting: true });
 
 			const pixelX = Math.round((x / 100) * selectedDevice.screenWidth);
 			const pixelY = Math.round((y / 100) * selectedDevice.screenHeight);
@@ -434,6 +320,56 @@ export function App() {
 		[activeSessionId, selectedDevice],
 	);
 
+	// Remote mode: tap (convert % coords to pixel coords and send via WebSocket)
+	const handleRemoteTap = useCallback(
+		(xPct: number, yPct: number) => {
+			if (!selectedDevice) return;
+			const x = Math.round((xPct / 100) * selectedDevice.screenWidth);
+			const y = Math.round((yPct / 100) * selectedDevice.screenHeight);
+			sendInput({ type: "tap", x, y });
+		},
+		[selectedDevice, sendInput],
+	);
+
+	// Remote mode: swipe
+	const handleRemoteSwipe = useCallback(
+		(fromXPct: number, fromYPct: number, toXPct: number, toYPct: number) => {
+			if (!selectedDevice) return;
+			const fromX = Math.round((fromXPct / 100) * selectedDevice.screenWidth);
+			const fromY = Math.round((fromYPct / 100) * selectedDevice.screenHeight);
+			const toX = Math.round((toXPct / 100) * selectedDevice.screenWidth);
+			const toY = Math.round((toYPct / 100) * selectedDevice.screenHeight);
+			sendInput({ type: "swipe", fromX, fromY, toX, toY, durationMs: 300 });
+		},
+		[selectedDevice, sendInput],
+	);
+
+	// Recording: start
+	const handleStartRecording = useCallback(() => {
+		if (!selectedDevice) return;
+		startRecording(selectedDevice.id, activeSessionId ?? undefined);
+	}, [selectedDevice, activeSessionId, startRecording]);
+
+	// Recording: stop
+	const handleStopRecording = useCallback(() => {
+		stopRecording();
+		setOverrideFrameUrl(null);
+	}, [stopRecording]);
+
+	// Recording: seek timeline
+	const handleTimelineSeek = useCallback(
+		(timestampMs: number) => {
+			const url = getFrameUrl(timestampMs);
+			setOverrideFrameUrl(url);
+		},
+		[getFrameUrl],
+	);
+
+	// Recording: close timeline (return to live)
+	const handleTimelineClose = useCallback(() => {
+		setOverrideFrameUrl(null);
+	}, []);
+
 	// Handle text region selection (text mode)
 	const handleTextSelect = useCallback(
 		async (region: TextRegion) => {
@@ -444,6 +380,8 @@ export function App() {
 			setClickCoords({
 				x: centerX,
 				y: centerY,
+				anchorX: window.innerWidth / 2,
+				anchorY: window.innerHeight / 2,
 				selectedText: region.text,
 				inspecting: true,
 			});
@@ -470,7 +408,14 @@ export function App() {
 			// Use center of area as annotation position
 			const centerX = area.x + area.width / 2;
 			const centerY = area.y + area.height / 2;
-			setClickCoords({ x: centerX, y: centerY, selectedArea: area, inspecting: true });
+			setClickCoords({
+				x: centerX,
+				y: centerY,
+				anchorX: window.innerWidth / 2,
+				anchorY: window.innerHeight / 2,
+				selectedArea: area,
+				inspecting: true,
+			});
 
 			const pixelX = Math.round((centerX / 100) * selectedDevice.screenWidth);
 			const pixelY = Math.round((centerY / 100) * selectedDevice.screenHeight);
@@ -489,11 +434,7 @@ export function App() {
 
 	// Handle annotation form submit
 	const handleAnnotationSubmit = useCallback(
-		async (data: {
-			comment: string;
-			intent: AnnotationIntent;
-			severity: AnnotationSeverity;
-		}) => {
+		async (comment: string) => {
 			if (!clickCoords || !activeSessionId || !selectedDevice) return;
 
 			setSubmittingAnnotation(true);
@@ -506,9 +447,9 @@ export function App() {
 					platform: selectedDevice.platform,
 					screenWidth: selectedDevice.screenWidth,
 					screenHeight: selectedDevice.screenHeight,
-					comment: data.comment,
-					intent: data.intent,
-					severity: data.severity,
+					comment,
+					intent: "fix",
+					severity: "important",
 					element: clickCoords.element ?? undefined,
 					selectedArea: clickCoords.selectedArea,
 					selectedText: clickCoords.selectedText,
@@ -536,6 +477,208 @@ export function App() {
 		}
 	}, [selectedDevice, animationsPaused]);
 
+	const handleClearAll = useCallback(async () => {
+		if (annotations.length === 0) return;
+		const confirmed = window.confirm(
+			`Dismiss all ${annotations.length} annotation${annotations.length === 1 ? "" : "s"}?`,
+		);
+		if (!confirmed) return;
+		for (const annotation of annotations) {
+			if (annotation.status !== "dismissed") {
+				await updateStatus(annotation.id, "dismiss");
+			}
+		}
+	}, [annotations, updateStatus]);
+
+	// Keyboard shortcuts — use ref to avoid re-attaching listener on every state change
+	const keyboardStateRef = useRef({
+		clickCoords,
+		sidebarView,
+		filters,
+		handleCopyAnnotations,
+		handleClearAll,
+		handleToggleAnimations,
+		filteredAnnotations,
+		liveSelectedAnnotation,
+		showShortcuts,
+		exportMenuOpen,
+		settingsOpen,
+	});
+	keyboardStateRef.current = {
+		clickCoords,
+		sidebarView,
+		filters,
+		handleCopyAnnotations,
+		handleClearAll,
+		handleToggleAnimations,
+		filteredAnnotations,
+		liveSelectedAnnotation,
+		showShortcuts,
+		exportMenuOpen,
+		settingsOpen,
+	};
+
+	useEffect(() => {
+		const handler = (e: KeyboardEvent) => {
+			const s = keyboardStateRef.current;
+
+			if (e.key === "Escape") {
+				if (s.settingsOpen) {
+					setSettingsOpen(false);
+				} else if (s.showShortcuts) {
+					setShowShortcuts(false);
+				} else if (s.exportMenuOpen) {
+					setExportMenuOpen(false);
+				} else if (s.clickCoords) {
+					setClickCoords(null);
+				} else if (s.sidebarView === "thread") {
+					setSidebarView("list");
+					setSelectedAnnotation(null);
+				} else if (s.filters.status || s.filters.intent || s.filters.severity) {
+					setFilters({ status: null, intent: null, severity: null });
+				}
+				return;
+			}
+
+			const target = e.target as HTMLElement;
+			if (
+				target.tagName === "INPUT" ||
+				target.tagName === "TEXTAREA" ||
+				target.tagName === "SELECT"
+			)
+				return;
+
+			if (e.key === "?") {
+				setShowShortcuts((v) => !v);
+				return;
+			}
+
+			// Toolbar shortcuts
+			if (e.key === "p" && !e.metaKey && !e.ctrlKey) {
+				s.handleToggleAnimations();
+				return;
+			}
+			if (e.key === "h" && !e.metaKey && !e.ctrlKey) {
+				setMarkersHidden((v) => !v);
+				return;
+			}
+			if (e.key === "x" && !e.metaKey && !e.ctrlKey) {
+				s.handleClearAll();
+				return;
+			}
+			if (e.key === "c" && !e.metaKey && !e.ctrlKey) {
+				s.handleCopyAnnotations();
+				return;
+			}
+
+			// Status filters
+			if (e.key === "1") {
+				setFilters((f) => ({
+					...f,
+					status: f.status === "pending" ? null : ("pending" as AnnotationStatus),
+				}));
+				return;
+			}
+			if (e.key === "2") {
+				setFilters((f) => ({
+					...f,
+					status: f.status === "acknowledged" ? null : ("acknowledged" as AnnotationStatus),
+				}));
+				return;
+			}
+			if (e.key === "3") {
+				setFilters((f) => ({
+					...f,
+					status: f.status === "resolved" ? null : ("resolved" as AnnotationStatus),
+				}));
+				return;
+			}
+			if (e.key === "4") {
+				setFilters((f) => ({
+					...f,
+					status: f.status === "dismissed" ? null : ("dismissed" as AnnotationStatus),
+				}));
+				return;
+			}
+
+			// Intent filters
+			if (e.key === "f" && !e.metaKey && !e.ctrlKey) {
+				setFilters((prev) => ({
+					...prev,
+					intent: prev.intent === "fix" ? null : ("fix" as AnnotationIntent),
+				}));
+				return;
+			}
+			if (e.key === "q" && !e.metaKey && !e.ctrlKey) {
+				setFilters((prev) => ({
+					...prev,
+					intent: prev.intent === "question" ? null : ("question" as AnnotationIntent),
+				}));
+				return;
+			}
+			if (e.key === "g" && !e.metaKey && !e.ctrlKey) {
+				setFilters((prev) => ({
+					...prev,
+					intent: prev.intent === "change" ? null : ("change" as AnnotationIntent),
+				}));
+				return;
+			}
+			if (e.key === "a" && !e.metaKey && !e.ctrlKey) {
+				setFilters((prev) => ({
+					...prev,
+					intent: prev.intent === "approve" ? null : ("approve" as AnnotationIntent),
+				}));
+				return;
+			}
+
+			// Sidebar navigation
+			if (e.key === "r" && !e.metaKey && !e.ctrlKey) {
+				if (s.sidebarView === "thread") {
+					setSidebarView("list");
+					setSelectedAnnotation(null);
+				}
+				return;
+			}
+			if (e.key === "e" && !e.metaKey && !e.ctrlKey) {
+				setExportMenuOpen((v) => !v);
+				return;
+			}
+			if (e.key === "t" && !e.metaKey && !e.ctrlKey) {
+				if (s.sidebarView === "thread") {
+					setSidebarView("list");
+					setSelectedAnnotation(null);
+				}
+				setSidebarTab((tab) => (tab === "elements" ? "annotations" : "elements"));
+				return;
+			}
+
+			// Annotation navigation (] = next, [ = previous)
+			if (e.key === "]" && !e.metaKey && !e.ctrlKey) {
+				if (s.filteredAnnotations.length === 0) return;
+				const currentIdx = s.liveSelectedAnnotation
+					? s.filteredAnnotations.findIndex((ann) => ann.id === s.liveSelectedAnnotation?.id)
+					: -1;
+				const nextIdx = currentIdx + 1 >= s.filteredAnnotations.length ? 0 : currentIdx + 1;
+				setSelectedAnnotation(s.filteredAnnotations[nextIdx]);
+				setSidebarView("thread");
+				return;
+			}
+			if (e.key === "[" && !e.metaKey && !e.ctrlKey) {
+				if (s.filteredAnnotations.length === 0) return;
+				const currentIdx = s.liveSelectedAnnotation
+					? s.filteredAnnotations.findIndex((ann) => ann.id === s.liveSelectedAnnotation?.id)
+					: -1;
+				const prevIdx = currentIdx <= 0 ? s.filteredAnnotations.length - 1 : currentIdx - 1;
+				setSelectedAnnotation(s.filteredAnnotations[prevIdx]);
+				setSidebarView("thread");
+				return;
+			}
+		};
+
+		window.addEventListener("keydown", handler);
+		return () => window.removeEventListener("keydown", handler);
+	}, []);
+
 	const handleSelectAnnotation = useCallback((annotation: MobileAnnotation) => {
 		setSelectedAnnotation(annotation);
 		setSidebarView("thread");
@@ -556,6 +699,18 @@ export function App() {
 		},
 		[updateStatus],
 	);
+
+	const handleRequestAction = useCallback(async (annotationId: string) => {
+		try {
+			await apiFetch(`/api/annotations/${annotationId}/request-action`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({}),
+			});
+		} catch {
+			// silently fail — dev tool
+		}
+	}, []);
 
 	return (
 		<div className="flex h-dvh bg-neutral-950 text-neutral-100">
@@ -584,25 +739,6 @@ export function App() {
 						<h1 className="flex-1 text-balance text-sm font-semibold tracking-tight">
 							agentation-mobile
 						</h1>
-						<button
-							type="button"
-							onClick={() => setDarkMode((v) => !v)}
-							className="rounded-md px-2 py-1 text-xs text-neutral-400 transition-colors hover:bg-neutral-800 hover:text-neutral-200"
-							aria-label={darkMode ? "Switch to light mode" : "Switch to dark mode"}
-							title={darkMode ? "Light mode" : "Dark mode"}
-						>
-							{darkMode ? "Light" : "Dark"}
-						</button>
-						<button
-							type="button"
-							onClick={handleCopyAnnotations}
-							disabled={annotations.length === 0}
-							className="rounded-md px-2 py-1 text-xs text-neutral-400 transition-colors hover:bg-neutral-800 hover:text-neutral-200 disabled:cursor-not-allowed disabled:opacity-50"
-							aria-label="Copy annotations to clipboard"
-							title="Copy annotations (C)"
-						>
-							{copyFeedback ?? "Copy"}
-						</button>
 						<ExportMenu
 							sessionId={activeSessionId}
 							disabled={annotations.length === 0}
@@ -720,6 +856,7 @@ export function App() {
 								setSelectedAnnotation(null);
 							}}
 							onUpdateStatus={handleUpdateStatus}
+							onRequestAction={handleRequestAction}
 						/>
 					)}
 				</div>
@@ -750,70 +887,7 @@ export function App() {
 			</aside>
 
 			{/* Main content area */}
-			<main className="flex flex-1 flex-col overflow-hidden">
-				{/* Mode toggle toolbar */}
-				{connected && frameUrl && (
-					<div className="flex items-center gap-1 border-b border-neutral-800 bg-neutral-900 px-4 py-1.5">
-						<span className="mr-2 text-xs text-neutral-600">Mode:</span>
-						<button
-							type="button"
-							onClick={() => setInteractionMode("point")}
-							className={cn(
-								"rounded px-2 py-0.5 text-xs transition-colors",
-								interactionMode === "point"
-									? "bg-neutral-700 text-neutral-200"
-									: "text-neutral-500 hover:text-neutral-300",
-							)}
-							title="Click to annotate a point"
-						>
-							Point
-						</button>
-						<button
-							type="button"
-							onClick={() => setInteractionMode("area")}
-							className={cn(
-								"rounded px-2 py-0.5 text-xs transition-colors",
-								interactionMode === "area"
-									? "bg-neutral-700 text-neutral-200"
-									: "text-neutral-500 hover:text-neutral-300",
-							)}
-							title="Drag to select an area"
-						>
-							Area
-						</button>
-						<button
-							type="button"
-							onClick={() => setInteractionMode("text")}
-							className={cn(
-								"rounded px-2 py-0.5 text-xs transition-colors",
-								interactionMode === "text"
-									? "bg-neutral-700 text-neutral-200"
-									: "text-neutral-500 hover:text-neutral-300",
-							)}
-							title="Click text to annotate it"
-						>
-							Text
-						</button>
-						<div className="mx-2 h-4 w-px bg-neutral-700" />
-						<button
-							type="button"
-							onClick={handleToggleAnimations}
-							className={cn(
-								"rounded px-2 py-0.5 text-xs transition-colors",
-								animationsPaused
-									? "bg-amber-600 text-neutral-100"
-									: "text-neutral-500 hover:text-neutral-300",
-							)}
-							title={
-								animationsPaused
-									? "Resume device animations"
-									: "Pause device animations for stable screenshots"
-							}
-						>
-							{animationsPaused ? "Animations Paused" : "Pause Animations"}
-						</button>
-					</div>
-				)}
+			<main className="relative flex flex-1 flex-col overflow-hidden">
 				<ScreenMirror
 					frameUrl={frameUrl}
 					connected={connected}
@@ -824,11 +898,65 @@ export function App() {
 					interactionMode={interactionMode}
 					textRegions={mergedTextRegions}
 					ocrLoading={ocrLoading}
+					markersHidden={markersHidden}
+					elements={elements}
+					screenWidth={selectedDevice?.screenWidth}
+					screenHeight={selectedDevice?.screenHeight}
+					pendingElement={clickCoords?.element}
 					onClickScreen={handleScreenClick}
 					onAreaSelect={handleAreaSelect}
 					onTextSelect={handleTextSelect}
 					onSelectAnnotation={handleSelectAnnotation}
+					onRemoteTap={handleRemoteTap}
+					onRemoteSwipe={handleRemoteSwipe}
+					overrideFrameUrl={overrideFrameUrl}
 				/>
+
+				{/* Floating toolbar */}
+				{connected && frameUrl && (
+					<Toolbar
+						interactionMode={interactionMode}
+						onInteractionModeChange={setInteractionMode}
+						animationsPaused={animationsPaused}
+						onToggleAnimations={handleToggleAnimations}
+						markersHidden={markersHidden}
+						onToggleMarkers={() => setMarkersHidden((v) => !v)}
+						onCopy={handleCopyAnnotations}
+						copyFeedback={copyFeedback}
+						onClearAll={handleClearAll}
+						annotationCount={annotations.length}
+						onOpenSettings={() => setSettingsOpen(true)}
+						onOpenShortcuts={() => setShowShortcuts(true)}
+					/>
+				)}
+
+				{/* Recording controls */}
+				{connected && frameUrl && (
+					<div className="pointer-events-none absolute inset-x-0 bottom-16 z-30 flex justify-center">
+						<div className="pointer-events-auto">
+							<RecordingControls
+								isRecording={isRecording}
+								elapsedMs={elapsedMs}
+								onStart={handleStartRecording}
+								onStop={handleStopRecording}
+							/>
+						</div>
+					</div>
+				)}
+
+				{/* Timeline scrubber (visible after recording stops with frames) */}
+				{!isRecording && recording && frames.length > 0 && (
+					<div className="pointer-events-none absolute inset-x-0 top-4 z-30 flex justify-center">
+						<div className="pointer-events-auto">
+							<Timeline
+								frames={frames}
+								durationMs={recording.durationMs}
+								onSeek={handleTimelineSeek}
+								onClose={handleTimelineClose}
+							/>
+						</div>
+					</div>
+				)}
 			</main>
 
 			{/* Annotation form popup */}
@@ -836,6 +964,8 @@ export function App() {
 				<AnnotationForm
 					x={clickCoords.x}
 					y={clickCoords.y}
+					anchorX={clickCoords.anchorX}
+					anchorY={clickCoords.anchorY}
 					element={clickCoords.element}
 					inspectingElement={clickCoords.inspecting}
 					selectedArea={clickCoords.selectedArea}
@@ -848,6 +978,15 @@ export function App() {
 
 			{/* Keyboard shortcuts overlay */}
 			{showShortcuts && <KeyboardShortcuts onClose={() => setShowShortcuts(false)} />}
+
+			{/* Settings panel */}
+			{settingsOpen && (
+				<SettingsPanel
+					darkMode={darkMode}
+					onToggleDarkMode={() => setDarkMode((v) => !v)}
+					onClose={() => setSettingsOpen(false)}
+				/>
+			)}
 		</div>
 	);
 }

@@ -36,6 +36,13 @@
 		}
 	},
 	"files": {
-		"ignore": ["node_modules", "dist", ".turbo"]
+		"ignore": [
+			"node_modules",
+			"dist",
+			".turbo",
+			"sdks/swift/.build",
+			"sdks/kotlin/.gradle",
+			"sdks/kotlin/build"
+		]
 	}
 }

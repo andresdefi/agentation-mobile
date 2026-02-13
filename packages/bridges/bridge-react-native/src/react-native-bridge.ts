@@ -1,6 +1,14 @@
 import { execFile as execFileCb } from "node:child_process";
 import { promisify } from "node:util";
-import type { DeviceInfo, IPlatformBridge } from "@agentation-mobile/bridge-core";
+import {
+	type DeviceInfo,
+	type IPlatformBridge,
+	hitTestElement,
+	isIosSimulatorId,
+	lookupIosScreenSize,
+	parseUiAutomatorXml,
+	parseWmSize,
+} from "@agentation-mobile/bridge-core";
 import type { MobileElement } from "@agentation-mobile/core";
 import WebSocket from "ws";
 
@@ -97,14 +105,10 @@ async function getAdbScreenSize(deviceId: string): Promise<{ width: number; heig
 		const { stdout } = await execFile("adb", ["-s", deviceId, "shell", "wm", "size"], {
 			timeout: ADB_TIMEOUT_MS,
 		});
-		const match = stdout.match(/(\d+)x(\d+)/);
-		if (match) {
-			return { width: Number(match[1]), height: Number(match[2]) };
-		}
+		return parseWmSize(stdout);
 	} catch {
-		// fall through
+		return { width: 0, height: 0 };
 	}
-	return { width: 0, height: 0 };
 }
 
 async function getAdbOsVersion(deviceId: string): Promise<string> {
@@ -129,12 +133,6 @@ async function getAdbOsVersion(deviceId: string): Promise<string> {
  * e.g. "A1B2C3D4-E5F6-7890-ABCD-EF1234567890".
  * Android device IDs are like "emulator-5554" or "192.168.x.x:5555".
  */
-const IOS_UDID_REGEX = /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/i;
-
-function isIosSimulatorId(deviceId: string): boolean {
-	return IOS_UDID_REGEX.test(deviceId);
-}
-
 interface SimctlDevice {
 	udid: string;
 	name: string;
@@ -149,39 +147,6 @@ interface SimctlRuntime {
 
 interface SimctlListOutput {
 	devices: SimctlRuntime;
-}
-
-/**
- * Common iOS simulator screen sizes keyed by device name substrings.
- * Used as a fallback when dynamic detection is not available.
- */
-const IOS_SCREEN_SIZES: Record<string, { width: number; height: number }> = {
-	"iPhone 16 Pro Max": { width: 440, height: 956 },
-	"iPhone 16 Pro": { width: 402, height: 874 },
-	"iPhone 16 Plus": { width: 430, height: 932 },
-	"iPhone 16": { width: 393, height: 852 },
-	"iPhone 15 Pro Max": { width: 430, height: 932 },
-	"iPhone 15 Pro": { width: 393, height: 852 },
-	"iPhone 15 Plus": { width: 430, height: 932 },
-	"iPhone 15": { width: 393, height: 852 },
-	"iPhone 14 Pro Max": { width: 430, height: 932 },
-	"iPhone 14 Pro": { width: 393, height: 852 },
-	"iPhone 14 Plus": { width: 428, height: 926 },
-	"iPhone 14": { width: 390, height: 844 },
-	"iPhone SE": { width: 375, height: 667 },
-	"iPad Pro (12.9-inch)": { width: 1024, height: 1366 },
-	"iPad Pro (11-inch)": { width: 834, height: 1194 },
-	"iPad Air": { width: 820, height: 1180 },
-	"iPad mini": { width: 744, height: 1133 },
-	iPad: { width: 810, height: 1080 },
-};
-
-function lookupIosScreenSize(deviceName: string): { width: number; height: number } {
-	for (const [key, size] of Object.entries(IOS_SCREEN_SIZES)) {
-		if (deviceName.includes(key)) return size;
-	}
-	// Fallback for unknown devices
-	return { width: 390, height: 844 };
 }
 
 function extractIosVersion(runtimeId: string): string {
@@ -304,6 +269,7 @@ function sendCdpCommand(
 ): Promise<CdpMessage> {
 	return new Promise((resolve, reject) => {
 		const timer = setTimeout(() => {
+			ws.off("message", handler);
 			reject(new Error(`CDP command ${method} timed out`));
 		}, CDP_TIMEOUT_MS);
 
@@ -435,6 +401,66 @@ const FIBER_WALK_SCRIPT = `
 		return parts;
 	}
 
+	function detectAnimations(fiber) {
+		var anims = [];
+		var props = fiber.memoizedProps || {};
+		var style = extractStyle(props);
+		if (!style) return anims;
+
+		var animProps = ["opacity", "transform", "backgroundColor", "width", "height",
+			"marginTop", "marginBottom", "marginLeft", "marginRight",
+			"paddingTop", "paddingBottom", "paddingLeft", "paddingRight",
+			"top", "left", "right", "bottom", "fontSize", "borderRadius",
+			"scaleX", "scaleY", "translateX", "translateY", "rotate"];
+
+		for (var i = 0; i < animProps.length; i++) {
+			var prop = animProps[i];
+			var val = style[prop];
+			if (val && typeof val === "object" && val._animation !== undefined) {
+				var animType = "unknown";
+				var anim = val._animation;
+				if (anim) {
+					if (anim._useNativeDriver !== undefined) {
+						if (anim._toValue !== undefined) animType = "timing";
+						if (anim._tension !== undefined) animType = "spring";
+						if (anim._deceleration !== undefined) animType = "decay";
+					}
+				}
+				var status = "completed";
+				if (val._animation && val._animation.__active) status = "running";
+				else if (val._listeners && Object.keys(val._listeners).length > 0) status = "running";
+				anims.push({
+					type: animType,
+					property: prop,
+					status: status,
+					duration: anim && anim._duration ? anim._duration : undefined,
+				});
+			}
+		}
+
+		// Check for transform array with animated values
+		if (Array.isArray(style.transform)) {
+			for (var t = 0; t < style.transform.length; t++) {
+				var transformEntry = style.transform[t];
+				if (transformEntry && typeof transformEntry === "object") {
+					var tKeys = Object.keys(transformEntry);
+					for (var k = 0; k < tKeys.length; k++) {
+						var tVal = transformEntry[tKeys[k]];
+						if (tVal && typeof tVal === "object" && tVal._animation !== undefined) {
+							anims.push({
+								type: "unknown",
+								property: "transform." + tKeys[k],
+								status: tVal._animation && tVal._animation.__active ? "running" : "completed",
+							});
+						}
+					}
+				}
+			}
+		}
+
+		return anims.length > 0 ? anims : undefined;
+	}
+
 	function walkFiber(fiber, depth) {
 		if (!fiber || depth > 60) return;
 
@@ -443,6 +469,7 @@ const FIBER_WALK_SCRIPT = `
 			var props = fiber.memoizedProps || {};
 			var source = fiber._debugSource;
 			var pathParts = buildPath(fiber, [name]);
+			var animations = detectAnimations(fiber);
 
 			elements.push({
 				id: "rn-" + (idCounter++),
@@ -454,6 +481,7 @@ const FIBER_WALK_SCRIPT = `
 				boundingBox: extractBoundingBox(fiber),
 				styleProps: extractStyle(props),
 				textContent: getTextContent(fiber),
+				animations: animations,
 				accessibility: {
 					label: props.accessibilityLabel || props["aria-label"] || undefined,
 					role: props.accessibilityRole || props.role || undefined,
@@ -522,77 +550,10 @@ async function getUiAutomatorTree(deviceId: string): Promise<MobileElement[]> {
 			{ timeout: ADB_TIMEOUT_MS, maxBuffer: 10 * 1024 * 1024 },
 		);
 
-		return parseUiAutomatorXml(stdout);
+		return parseUiAutomatorXml(stdout, "react-native");
 	} catch {
 		return [];
 	}
-}
-
-function parseUiAutomatorXml(xml: string): MobileElement[] {
-	const elements: MobileElement[] = [];
-	let idCounter = 0;
-
-	const nodeRegex = /<node\s([^>]+)\/?>/g;
-	let match: RegExpExecArray | null = nodeRegex.exec(xml);
-
-	while (match !== null) {
-		const attrs = match[1];
-		const className = extractAttr(attrs, "class") ?? "Unknown";
-		const text = extractAttr(attrs, "text");
-		const contentDesc = extractAttr(attrs, "content-desc");
-		const bounds = extractAttr(attrs, "bounds");
-
-		const bbox = parseBounds(bounds);
-
-		const shortName = className.includes(".")
-			? (className.split(".").pop() ?? className)
-			: className;
-
-		elements.push({
-			id: `ua-${idCounter++}`,
-			platform: "react-native",
-			componentName: shortName,
-			componentPath: className,
-			componentFile: undefined,
-			boundingBox: bbox,
-			styleProps: undefined,
-			textContent: text || undefined,
-			nearbyText: contentDesc || undefined,
-			accessibility: {
-				label: contentDesc || undefined,
-				role: undefined,
-				hint: undefined,
-				value: text || undefined,
-				traits: undefined,
-			},
-		});
-
-		match = nodeRegex.exec(xml);
-	}
-
-	return elements;
-}
-
-function extractAttr(attrs: string, name: string): string | null {
-	const regex = new RegExp(`${name}="([^"]*)"`, "i");
-	const m = attrs.match(regex);
-	return m ? m[1] : null;
-}
-
-function parseBounds(bounds: string | null): {
-	x: number;
-	y: number;
-	width: number;
-	height: number;
-} {
-	if (!bounds) return { x: 0, y: 0, width: 0, height: 0 };
-	const m = bounds.match(/\[(\d+),(\d+)\]\[(\d+),(\d+)\]/);
-	if (!m) return { x: 0, y: 0, width: 0, height: 0 };
-	const left = Number(m[1]);
-	const top = Number(m[2]);
-	const right = Number(m[3]);
-	const bottom = Number(m[4]);
-	return { x: left, y: top, width: right - left, height: bottom - top };
 }
 
 // ---------------------------------------------------------------------------
@@ -757,22 +718,24 @@ export class ReactNativeBridge implements IPlatformBridge {
 				};
 			}
 
-			// Android: disable all animation scales via ADB
-			await execFile(
-				"adb",
-				["-s", deviceId, "shell", "settings", "put", "global", "animator_duration_scale", "0"],
-				{ timeout: ADB_TIMEOUT_MS },
-			);
-			await execFile(
-				"adb",
-				["-s", deviceId, "shell", "settings", "put", "global", "transition_animation_scale", "0"],
-				{ timeout: ADB_TIMEOUT_MS },
-			);
-			await execFile(
-				"adb",
-				["-s", deviceId, "shell", "settings", "put", "global", "window_animation_scale", "0"],
-				{ timeout: ADB_TIMEOUT_MS },
-			);
+			// Android: disable all animation scales via ADB in parallel
+			await Promise.all([
+				execFile(
+					"adb",
+					["-s", deviceId, "shell", "settings", "put", "global", "animator_duration_scale", "0"],
+					{ timeout: ADB_TIMEOUT_MS },
+				),
+				execFile(
+					"adb",
+					["-s", deviceId, "shell", "settings", "put", "global", "transition_animation_scale", "0"],
+					{ timeout: ADB_TIMEOUT_MS },
+				),
+				execFile(
+					"adb",
+					["-s", deviceId, "shell", "settings", "put", "global", "window_animation_scale", "0"],
+					{ timeout: ADB_TIMEOUT_MS },
+				),
+			]);
 			return { success: true, message: "All animations disabled on Android device" };
 		} catch (err) {
 			return { success: false, message: `${err}` };
@@ -810,24 +773,123 @@ export class ReactNativeBridge implements IPlatformBridge {
 				};
 			}
 
-			await execFile(
-				"adb",
-				["-s", deviceId, "shell", "settings", "put", "global", "animator_duration_scale", "1"],
-				{ timeout: ADB_TIMEOUT_MS },
-			);
-			await execFile(
-				"adb",
-				["-s", deviceId, "shell", "settings", "put", "global", "transition_animation_scale", "1"],
-				{ timeout: ADB_TIMEOUT_MS },
-			);
-			await execFile(
-				"adb",
-				["-s", deviceId, "shell", "settings", "put", "global", "window_animation_scale", "1"],
-				{ timeout: ADB_TIMEOUT_MS },
-			);
+			await Promise.all([
+				execFile(
+					"adb",
+					["-s", deviceId, "shell", "settings", "put", "global", "animator_duration_scale", "1"],
+					{ timeout: ADB_TIMEOUT_MS },
+				),
+				execFile(
+					"adb",
+					["-s", deviceId, "shell", "settings", "put", "global", "transition_animation_scale", "1"],
+					{ timeout: ADB_TIMEOUT_MS },
+				),
+				execFile(
+					"adb",
+					["-s", deviceId, "shell", "settings", "put", "global", "window_animation_scale", "1"],
+					{ timeout: ADB_TIMEOUT_MS },
+				),
+			]);
 			return { success: true, message: "All animations restored on Android device" };
 		} catch (err) {
 			return { success: false, message: `${err}` };
+		}
+	}
+
+	async sendTap(deviceId: string, x: number, y: number): Promise<void> {
+		if (isIosSimulatorId(deviceId)) {
+			await execFile(
+				"xcrun",
+				["simctl", "io", deviceId, "input", "tap", String(Math.round(x)), String(Math.round(y))],
+				{ timeout: ADB_TIMEOUT_MS },
+			);
+		} else {
+			await execFile(
+				"adb",
+				["-s", deviceId, "shell", "input", "tap", String(Math.round(x)), String(Math.round(y))],
+				{ timeout: ADB_TIMEOUT_MS },
+			);
+		}
+	}
+
+	async sendSwipe(
+		deviceId: string,
+		fromX: number,
+		fromY: number,
+		toX: number,
+		toY: number,
+		durationMs = 300,
+	): Promise<void> {
+		if (isIosSimulatorId(deviceId)) {
+			await execFile(
+				"xcrun",
+				[
+					"simctl",
+					"io",
+					deviceId,
+					"input",
+					"swipe",
+					String(Math.round(fromX)),
+					String(Math.round(fromY)),
+					String(Math.round(toX)),
+					String(Math.round(toY)),
+				],
+				{ timeout: ADB_TIMEOUT_MS },
+			);
+		} else {
+			await execFile(
+				"adb",
+				[
+					"-s",
+					deviceId,
+					"shell",
+					"input",
+					"swipe",
+					String(Math.round(fromX)),
+					String(Math.round(fromY)),
+					String(Math.round(toX)),
+					String(Math.round(toY)),
+					String(durationMs),
+				],
+				{ timeout: ADB_TIMEOUT_MS },
+			);
+		}
+	}
+
+	async sendText(deviceId: string, text: string): Promise<void> {
+		if (isIosSimulatorId(deviceId)) {
+			// Pasteboard approach for iOS
+			const { execFile: execFileCb } = await import("node:child_process");
+			await new Promise<void>((resolve, reject) => {
+				const child = execFileCb(
+					"xcrun",
+					["simctl", "pbcopy", deviceId],
+					{ timeout: ADB_TIMEOUT_MS },
+					(err) => (err ? reject(err) : resolve()),
+				);
+				child.stdin?.write(text);
+				child.stdin?.end();
+			});
+			await execFile("xcrun", ["simctl", "io", deviceId, "sendkey", "command-v"], {
+				timeout: ADB_TIMEOUT_MS,
+			});
+		} else {
+			const escaped = text.replace(/([\\'"$ `!&|;(){}[\]<>?*#~])/g, "\\$1").replace(/ /g, "%s");
+			await execFile("adb", ["-s", deviceId, "shell", "input", "text", escaped], {
+				timeout: ADB_TIMEOUT_MS,
+			});
+		}
+	}
+
+	async sendKeyEvent(deviceId: string, keyCode: string): Promise<void> {
+		if (isIosSimulatorId(deviceId)) {
+			await execFile("xcrun", ["simctl", "io", deviceId, "sendkey", keyCode], {
+				timeout: ADB_TIMEOUT_MS,
+			});
+		} else {
+			await execFile("adb", ["-s", deviceId, "shell", "input", "keyevent", keyCode], {
+				timeout: ADB_TIMEOUT_MS,
+			});
 		}
 	}
 
@@ -902,6 +964,12 @@ interface RawFiberElement {
 	boundingBox: { x: number; y: number; width: number; height: number };
 	styleProps?: Record<string, unknown>;
 	textContent?: string;
+	animations?: Array<{
+		type: string;
+		property: string;
+		status?: string;
+		duration?: number;
+	}>;
 	accessibility?: {
 		label?: string;
 		role?: string;
@@ -911,17 +979,53 @@ interface RawFiberElement {
 	};
 }
 
+function parseSourceLocation(
+	componentFile?: string,
+): { file: string; line: number; column?: number } | undefined {
+	if (!componentFile) return undefined;
+	// Format: "fileName:lineNumber" or "fileName:lineNumber:column"
+	const lastColon = componentFile.lastIndexOf(":");
+	if (lastColon <= 0) return undefined;
+	const beforeLastColon = componentFile.substring(0, lastColon);
+	const afterLastColon = componentFile.substring(lastColon + 1);
+	const num = Number(afterLastColon);
+	if (Number.isNaN(num)) return undefined;
+	// Check for a second colon (column)
+	const secondColon = beforeLastColon.lastIndexOf(":");
+	if (secondColon > 0) {
+		const maybeLine = Number(beforeLastColon.substring(secondColon + 1));
+		if (!Number.isNaN(maybeLine)) {
+			return {
+				file: beforeLastColon.substring(0, secondColon),
+				line: maybeLine,
+				column: num,
+			};
+		}
+	}
+	return { file: beforeLastColon, line: num };
+}
+
 function toMobileElement(raw: RawFiberElement): MobileElement {
+	const sourceLocation = parseSourceLocation(raw.componentFile);
 	return {
 		id: raw.id,
 		platform: "react-native",
 		componentName: raw.componentName,
 		componentPath: raw.componentPath,
 		componentFile: raw.componentFile,
+		sourceLocation,
 		boundingBox: raw.boundingBox,
 		styleProps: raw.styleProps,
 		textContent: raw.textContent,
 		nearbyText: undefined,
+		animations: raw.animations?.map((a) => ({
+			type:
+				(a.type as "timing" | "spring" | "decay" | "transition" | "keyframe" | "unknown") ??
+				"unknown",
+			property: a.property,
+			status: a.status as "running" | "paused" | "completed" | undefined,
+			duration: a.duration,
+		})),
 		accessibility: raw.accessibility
 			? {
 					label: raw.accessibility.label,
@@ -932,30 +1036,4 @@ function toMobileElement(raw: RawFiberElement): MobileElement {
 				}
 			: undefined,
 	};
-}
-
-// ---------------------------------------------------------------------------
-// Hit-testing: find smallest element whose bounding box contains (x, y)
-// ---------------------------------------------------------------------------
-
-function hitTestElement(elements: MobileElement[], x: number, y: number): MobileElement | null {
-	let best: MobileElement | null = null;
-	let bestArea = Number.POSITIVE_INFINITY;
-
-	for (const el of elements) {
-		const bb = el.boundingBox;
-		if (bb.width <= 0 || bb.height <= 0) continue;
-
-		const inBounds = x >= bb.x && x <= bb.x + bb.width && y >= bb.y && y <= bb.y + bb.height;
-
-		if (inBounds) {
-			const area = bb.width * bb.height;
-			if (area < bestArea) {
-				bestArea = area;
-				best = el;
-			}
-		}
-	}
-
-	return best;
 }

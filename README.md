@@ -1,27 +1,21 @@
 # agentation-mobile
 
+[![npm version](https://img.shields.io/npm/v/agentation-mobile)](https://www.npmjs.com/package/agentation-mobile)
+
 Visual feedback for mobile apps. Point at elements on your phone screen, write feedback, and your AI coding agent gets the exact component name, source file, and bounding box — no more describing "the blue button at the top."
 
 ## Install
 
-```shell
+```bash
 npm install agentation-mobile -D
-```
-
-Or run directly:
-
-```shell
-npx agentation-mobile start
 ```
 
 ## Usage
 
-### Web UI
-
-```shell
+```bash
 npx agentation-mobile start
 # Open http://localhost:4747
-# Click elements to annotate, agents read via MCP
+# Hover to highlight, click to annotate, copy or MCP
 ```
 
 ### MCP
@@ -39,70 +33,22 @@ Add to your Claude Code config (`~/.claude/mcp.json`):
 }
 ```
 
-Then just tell your agent: _"address my feedback"_ or _"fix annotation 3."_
+Then tell your agent: _"address my feedback"_ or _"fix annotation 3."_
 
 ## Features
 
-- **Live screen mirroring** — View device screens in the browser via scrcpy or screenshot polling
-- **Click-to-annotate** — Click any element to create a positioned annotation with component info
-- **Multi-platform** — React Native, Flutter, iOS native, Android native
-- **MCP server** — 18 tools for AI agent integration (Claude Code, Cursor, etc.)
-- **Element tree inspection** — Full UI component trees with source file locations
+- **Click to annotate** — Hover to highlight, click any element with automatic component identification
 - **Text selection** — OCR + native text regions for annotating specific text
-- **Area selection** — Drag to select a region for layout or spacing feedback
-- **Animation control** — Pause/resume device animations for stable screenshots
-- **Multi-device** — Annotate across multiple devices with tabbed interface
-- **Before/after screenshots** — Capture resolution screenshots for visual diff comparison
-- **In-app SDKs** — Dev overlay components for React Native and Flutter
-- **Export** — JSON, Markdown, or GitHub Issues directly via `gh`
-- **WiFi debugging** — Connect to Android devices wirelessly
+- **Area selection** — Drag to annotate any region, even empty space
+- **Multi-platform** — React Native, Flutter, iOS native, Android native
+- **MCP server** — Tools for AI agent integration (Claude Code, Cursor, etc.)
+- **Structured output** — Copy markdown with component names, source paths, and context
+- **Live mirroring** — View device screens in the browser via scrcpy or screenshot polling
+- **In-app SDKs** — Dev overlay components for React Native, Flutter, Swift, and Kotlin
 
-## How you use it
+## How it works
 
-1. Start the server with `npx agentation-mobile start`
-2. Open `http://localhost:4747` in your browser
-3. Select your device from the device picker
-4. Click any element on the mirrored screen to annotate it
-5. Write your feedback with intent (fix / change / question / approve) and severity
-6. Press `C` to copy structured markdown, or use MCP so agents see it automatically
-
-## How agents use it
-
-agentation-mobile works best with AI tools that have access to your codebase (Claude Code, Cursor, etc.). When your agent reads annotations via MCP, it gets:
-
-- **Component names** to find the right file (`LoginButton`, `ProfileCard`)
-- **Source file paths** to grep your codebase (`src/screens/Login.tsx:42`)
-- **Bounding boxes** to understand layout and positioning
-- **Your feedback** with intent and priority
-
-Without agentation-mobile, you'd have to describe the element ("the login button below the email field") and hope the agent guesses right. With agentation-mobile, you give it `LoginButton (src/screens/Login.tsx:42)` and it can find that directly.
-
-## Agents talk back
-
-With MCP integration, agents don't just read your annotations — they respond:
-
-- _"What annotations do I have?"_ — List all feedback across sessions
-- _"Should this be 24px or 16px?"_ — Agent asks for clarification via thread reply
-- _"Fixed the padding"_ — Agent resolves with an after-screenshot for visual diff
-- _"Clear all annotations"_ — Dismiss everything at once
-
-Your feedback becomes a conversation, not a one-way ticket into the void.
-
-## CLI
-
-```shell
-agentation-mobile start                # Start server + web UI
-agentation-mobile mcp                  # Start MCP server (stdio)
-agentation-mobile mcp --transport http # Start MCP server (HTTP)
-agentation-mobile devices              # List connected devices
-agentation-mobile capture              # Capture a screenshot
-agentation-mobile inspect 100 200      # Inspect element at coordinates
-agentation-mobile status               # Show pending annotations
-agentation-mobile connect 192.168.1.5  # Connect to device over WiFi
-agentation-mobile pair 192.168.1.5 37000 123456  # Pair Android device
-agentation-mobile export -s <id>       # Export annotations
-agentation-mobile export -s <id> -f github  # Create GitHub issues
-```
+agentation-mobile captures component names, source file paths, and bounding boxes so AI agents can find the exact code you're referring to. Instead of describing "the login button below the email field," you give the agent `LoginButton (src/screens/Login.tsx:42)` and your feedback.
 
 ## Requirements
 
@@ -112,7 +58,7 @@ agentation-mobile export -s <id> -f github  # Create GitHub issues
 - **Android native** — ADB installed, device/emulator connected
 - **iOS native** — Xcode with `simctl`, simulator running
 
-Everything runs locally on your machine. No servers, no accounts, no data leaves your device.
+Everything runs locally. No servers, no accounts, no data leaves your machine.
 
 ## License
 

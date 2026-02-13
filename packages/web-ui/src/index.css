@@ -2,6 +2,47 @@
 @tailwind components;
 @tailwind utilities;
 
+@keyframes popup-enter {
+	from {
+		opacity: 0;
+		transform: translateX(-50%) scale(0.95) translateY(4px);
+	}
+	to {
+		opacity: 1;
+		transform: translateX(-50%) scale(1) translateY(0);
+	}
+}
+
+@keyframes popup-exit {
+	from {
+		opacity: 1;
+		transform: translateX(-50%) scale(1) translateY(0);
+	}
+	to {
+		opacity: 0;
+		transform: translateX(-50%) scale(0.95) translateY(4px);
+	}
+}
+
+@keyframes popup-shake {
+	0%,
+	100% {
+		transform: translateX(-50%) scale(1) translateY(0) translateX(0);
+	}
+	20% {
+		transform: translateX(-50%) scale(1) translateY(0) translateX(-3px);
+	}
+	40% {
+		transform: translateX(-50%) scale(1) translateY(0) translateX(3px);
+	}
+	60% {
+		transform: translateX(-50%) scale(1) translateY(0) translateX(-2px);
+	}
+	80% {
+		transform: translateX(-50%) scale(1) translateY(0) translateX(2px);
+	}
+}
+
 @layer base {
 	/* Light mode (default): inverted neutral palette */
 	:root {

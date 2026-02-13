@@ -130,20 +130,20 @@ describe("exportToMarkdown", () => {
 });
 
 describe("exportToAgentMarkdown", () => {
-	it("produces compact header with session info", () => {
+	it("produces header with session info", () => {
 		const session = makeSession();
 		const md = exportToAgentMarkdown([makeAnnotation()], session);
-		expect(md).toContain("# Login Screen Review — 1 annotations");
-		expect(md).toContain("Platform: react-native");
+		expect(md).toContain("## Screen Feedback: Login Screen Review (react-native)");
+		expect(md).toContain("**Screen:** device-1");
 	});
 
-	it("includes numbered annotations with intent/severity tags", () => {
+	it("includes numbered annotations with element name and feedback", () => {
 		const md = exportToAgentMarkdown([makeAnnotation()]);
-		expect(md).toContain("1. [fix/important]");
-		expect(md).toContain("Button text is truncated");
+		expect(md).toContain("### 1.");
+		expect(md).toContain("**Feedback:** Button text is truncated");
 	});
 
-	it("includes sourceRef when element has componentFile", () => {
+	it("includes source when element has componentFile", () => {
 		const annotation = makeAnnotation({
 			element: {
 				id: "el-1",
@@ -155,7 +155,9 @@ describe("exportToAgentMarkdown", () => {
 			},
 		});
 		const md = exportToAgentMarkdown([annotation]);
-		expect(md).toContain("Button (src/Login.tsx)");
+		expect(md).toContain("### 1. Button");
+		expect(md).toContain("**Component:** App/Login/Button");
+		expect(md).toContain("**Source:** src/Login.tsx");
 	});
 
 	it("includes componentPath when no componentFile", () => {
@@ -169,25 +171,45 @@ describe("exportToAgentMarkdown", () => {
 			},
 		});
 		const md = exportToAgentMarkdown([annotation]);
-		expect(md).toContain("Card > App/Dashboard/Card");
+		expect(md).toContain("### 1. Card");
+		expect(md).toContain("**Component:** App/Dashboard/Card");
 	});
 
-	it("includes thread messages compactly", () => {
+	it("uses element display name with text content", () => {
 		const annotation = makeAnnotation({
-			thread: [
-				{ role: "human", content: "Fix this", timestamp: "2025-01-01T01:00:00.000Z" },
-				{ role: "agent", content: "Done", timestamp: "2025-01-01T01:01:00.000Z" },
-			],
+			element: {
+				id: "el-1",
+				platform: "react-native",
+				componentPath: "App/Login/Button",
+				componentName: "Button",
+				componentFile: "src/Login.tsx",
+				boundingBox: { x: 0, y: 0, width: 100, height: 40 },
+				textContent: "Submit",
+			},
 		});
 		const md = exportToAgentMarkdown([annotation]);
-		expect(md).toContain("> human: Fix this");
-		expect(md).toContain("> agent: Done");
+		expect(md).toContain('### 1. Button "Submit"');
 	});
 
-	it("includes status and position", () => {
+	it("falls back to point coordinates when no element", () => {
 		const md = exportToAgentMarkdown([makeAnnotation()]);
-		expect(md).toContain("Status: pending");
-		expect(md).toContain("Position: 50.0%, 30.0%");
+		expect(md).toContain("### 1. Point 50%, 30%");
+	});
+
+	it("includes source with line number from sourceLocation", () => {
+		const annotation = makeAnnotation({
+			element: {
+				id: "el-1",
+				platform: "react-native",
+				componentPath: "App/Login/Button",
+				componentName: "Button",
+				componentFile: "src/Login.tsx",
+				sourceLocation: { file: "src/Login.tsx", line: 42 },
+				boundingBox: { x: 0, y: 0, width: 100, height: 40 },
+			},
+		});
+		const md = exportToAgentMarkdown([annotation]);
+		expect(md).toContain("**Source:** src/Login.tsx:42");
 	});
 });
 

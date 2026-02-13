@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { type Worker, createWorker } from "tesseract.js";
 
 export interface TextRegion {
@@ -101,6 +101,14 @@ export function useOcr(): UseOcrResult {
 	const clear = useCallback(() => {
 		setRegions([]);
 		setError(null);
+	}, []);
+
+	// Terminate worker on unmount to prevent memory leak
+	useEffect(() => {
+		return () => {
+			workerRef.current?.terminate();
+			workerRef.current = null;
+		};
 	}, []);
 
 	return { regions, loading, error, runOcr, clear };

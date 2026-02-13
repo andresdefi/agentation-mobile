@@ -82,6 +82,10 @@ function TreeNode({
 
 				<span className="truncate font-mono text-blue-400">{element.componentName}</span>
 
+				{element.animations && element.animations.length > 0 && (
+					<span className="ml-0.5 size-1.5 shrink-0 rounded-full bg-amber-400" title="Animated" />
+				)}
+
 				{element.textContent && (
 					<span className="ml-1 truncate text-neutral-600">&quot;{element.textContent}&quot;</span>
 				)}
@@ -112,7 +116,19 @@ function ElementDetail({ element }: { element: MobileElement }) {
 				</span>
 			</div>
 
-			{element.componentFile && (
+			{element.sourceLocation && (
+				<div className="flex flex-col gap-0.5">
+					<span className="text-xs font-medium uppercase tracking-wide text-neutral-600">
+						Source
+					</span>
+					<span className="truncate font-mono text-xs text-emerald-400">
+						{element.sourceLocation.file}:{element.sourceLocation.line}
+						{element.sourceLocation.column != null && `:${element.sourceLocation.column}`}
+					</span>
+				</div>
+			)}
+
+			{!element.sourceLocation && element.componentFile && (
 				<div className="flex flex-col gap-0.5">
 					<span className="text-xs font-medium uppercase tracking-wide text-neutral-600">
 						Source
@@ -154,6 +170,37 @@ function ElementDetail({ element }: { element: MobileElement }) {
 				<div className="flex flex-col gap-0.5">
 					<span className="text-xs font-medium uppercase tracking-wide text-neutral-600">Text</span>
 					<span className="text-xs text-neutral-400">{element.textContent}</span>
+				</div>
+			)}
+
+			{element.animations && element.animations.length > 0 && (
+				<div className="flex flex-col gap-0.5">
+					<span className="text-xs font-medium uppercase tracking-wide text-neutral-600">
+						Animations
+					</span>
+					<div className="flex flex-col gap-1">
+						{element.animations.map((anim, i) => (
+							<div key={`${anim.property}-${i}`} className="flex items-center gap-1.5">
+								<span
+									className={cn(
+										"size-1.5 rounded-full",
+										anim.status === "running"
+											? "bg-amber-400"
+											: anim.status === "paused"
+												? "bg-blue-400"
+												: "bg-neutral-500",
+									)}
+								/>
+								<span className="font-mono text-xs text-amber-300">{anim.property}</span>
+								<span className="text-xs text-neutral-600">({anim.type})</span>
+								{anim.duration && (
+									<span className="font-mono text-xs tabular-nums text-neutral-500">
+										{anim.duration}ms
+									</span>
+								)}
+							</div>
+						))}
+					</div>
 				</div>
 			)}
 		</div>

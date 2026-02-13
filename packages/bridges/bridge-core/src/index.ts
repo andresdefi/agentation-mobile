@@ -1,4 +1,15 @@
-import type { MobileElement, Platform } from "@agentation-mobile/core";
+import type { AnimationInfo, MobileElement, Platform } from "@agentation-mobile/core";
+
+export { parseUiAutomatorXml, hitTestElement } from "./uiautomator";
+export { parseWmSize } from "./android-utils";
+export {
+	IOS_UDID_REGEX,
+	isIosSimulatorId,
+	IOS_SCREEN_SIZES,
+	lookupIosScreenSize,
+} from "./ios-devices";
+export { SourceMapResolver } from "./source-maps";
+export type { SourceMapping, SourceMap } from "./source-maps";
 
 export interface DeviceInfo {
 	id: string;
@@ -46,6 +57,28 @@ export interface IPlatformBridge {
 
 	/** Resume animations on the device (optional) */
 	resumeAnimations?(deviceId: string): Promise<{ success: boolean; message: string }>;
+
+	/** Tap at screen coordinates (optional) */
+	sendTap?(deviceId: string, x: number, y: number): Promise<void>;
+
+	/** Swipe gesture between two points (optional) */
+	sendSwipe?(
+		deviceId: string,
+		fromX: number,
+		fromY: number,
+		toX: number,
+		toY: number,
+		durationMs?: number,
+	): Promise<void>;
+
+	/** Type text into the currently focused field (optional) */
+	sendText?(deviceId: string, text: string): Promise<void>;
+
+	/** Send a key event (optional) */
+	sendKeyEvent?(deviceId: string, keyCode: string): Promise<void>;
+
+	/** Get active animations on the current screen (optional) */
+	getActiveAnimations?(deviceId: string): Promise<AnimationInfo[]>;
 }
 
 export type { DeviceInfo as Device };

@@ -2,6 +2,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { apiFetch } from "../api";
 import type { DeviceInfo } from "../types";
 
+interface UseDevicesOptions {
+	/** When false, polling is paused (initial fetch still runs). Defaults to true. */
+	enabled?: boolean;
+}
+
 interface UseDevicesResult {
 	devices: DeviceInfo[];
 	loading: boolean;
@@ -9,7 +14,8 @@ interface UseDevicesResult {
 	refresh: () => Promise<void>;
 }
 
-export function useDevices(): UseDevicesResult {
+export function useDevices(options: UseDevicesOptions = {}): UseDevicesResult {
+	const { enabled = true } = options;
 	const [devices, setDevices] = useState<DeviceInfo[]>([]);
 	const [loading, setLoading] = useState(true);
 	const [error, setError] = useState<string | null>(null);
@@ -37,13 +43,15 @@ export function useDevices(): UseDevicesResult {
 		mountedRef.current = true;
 		fetchDevices();
 
+		if (!enabled) return;
+
 		const interval = setInterval(fetchDevices, 5000);
 
 		return () => {
 			mountedRef.current = false;
 			clearInterval(interval);
 		};
-	}, [fetchDevices]);
+	}, [fetchDevices, enabled]);
 
 	return { devices, loading, error, refresh: fetchDevices };
 }
