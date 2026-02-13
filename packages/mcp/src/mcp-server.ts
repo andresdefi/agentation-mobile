@@ -1,5 +1,5 @@
 import type { DeviceInfo, IPlatformBridge } from "@agentation-mobile/bridge-core";
-import type { Store } from "@agentation-mobile/core";
+import { type Store, exportToJson, exportToMarkdown } from "@agentation-mobile/core";
 import type { EventBus } from "@agentation-mobile/server";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
@@ -80,15 +80,65 @@ export function createMcpServer(deps: McpServerDeps) {
 
 	server.tool(
 		"agentation_mobile_resolve",
-		"Mark an annotation as resolved",
-		{ annotationId: z.string().describe("Annotation ID") },
-		async ({ annotationId }) => {
+		"Mark an annotation as resolved, optionally attaching an after-screenshot for diff comparison",
+		{
+			annotationId: z.string().describe("Annotation ID"),
+			screenshotId: z
+				.string()
+				.optional()
+				.describe("Optional screenshot ID of the 'after' state to attach for before/after diff"),
+		},
+		async ({ annotationId, screenshotId }) => {
+			if (screenshotId) {
+				store.attachResolutionScreenshot(annotationId, screenshotId);
+			}
 			const annotation = store.updateAnnotationStatus(annotationId, "resolved");
 			if (!annotation) {
 				return { content: [{ type: "text", text: "Annotation not found" }], isError: true };
 			}
 			eventBus.emit("annotation:status", annotation);
 			return { content: [{ type: "text", text: JSON.stringify(annotation, null, 2) }] };
+		},
+	);
+
+	server.tool(
+		"agentation_mobile_capture_and_resolve",
+		"Capture a screenshot of the current device screen, attach it as the resolution (after) screenshot, and resolve the annotation in one step",
+		{
+			annotationId: z.string().describe("Annotation ID"),
+			deviceId: z.string().describe("Device ID to capture the after-screenshot from"),
+		},
+		async ({ annotationId, deviceId }) => {
+			const bridge = await findBridge(bridges, deviceId);
+			if (!bridge) {
+				return { content: [{ type: "text", text: "Device not found" }], isError: true };
+			}
+			try {
+				const screenshot = await bridge.captureScreen(deviceId);
+				const screenshotId = crypto.randomUUID();
+				store.storeScreenshot(screenshotId, screenshot);
+				store.attachResolutionScreenshot(annotationId, screenshotId);
+				const annotation = store.updateAnnotationStatus(annotationId, "resolved");
+				if (!annotation) {
+					return { content: [{ type: "text", text: "Annotation not found" }], isError: true };
+				}
+				eventBus.emit("annotation:status", annotation);
+				const base64 = screenshot.toString("base64");
+				return {
+					content: [
+						{
+							type: "text",
+							text: `Annotation resolved with after-screenshot. Screenshot ID: ${screenshotId}`,
+						},
+						{ type: "image", data: base64, mimeType: "image/png" },
+					],
+				};
+			} catch (err) {
+				return {
+					content: [{ type: "text", text: `Capture failed: ${err}` }],
+					isError: true,
+				};
+			}
 		},
 	);
 
@@ -264,6 +314,69 @@ export function createMcpServer(deps: McpServerDeps) {
 					isError: true,
 				};
 			}
+		},
+	);
+
+	// --- Multi-device tools ---
+
+	server.tool(
+		"agentation_mobile_add_device_to_session",
+		"Add a device to an existing session for multi-device annotation",
+		{
+			sessionId: z.string().describe("Session ID"),
+			deviceId: z.string().describe("Device ID from list_devices"),
+			platform: z.string().describe("Device platform"),
+		},
+		async ({ sessionId, deviceId, platform }) => {
+			const session = store.addDeviceToSession(sessionId, deviceId, platform);
+			if (!session) {
+				return { content: [{ type: "text", text: "Session not found" }], isError: true };
+			}
+			return { content: [{ type: "text", text: JSON.stringify(session, null, 2) }] };
+		},
+	);
+
+	server.tool(
+		"agentation_mobile_connect_wifi",
+		"Connect to an Android device over WiFi for wireless debugging",
+		{
+			host: z.string().describe("Device IP address"),
+			port: z.number().optional().describe("ADB port (default 5555)"),
+		},
+		async ({ host, port }) => {
+			for (const bridge of bridges) {
+				if (bridge.connectWifi) {
+					const result = await bridge.connectWifi(host, port);
+					return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+				}
+			}
+			return {
+				content: [{ type: "text", text: "No bridge supports WiFi connection" }],
+				isError: true,
+			};
+		},
+	);
+
+	// --- Export tools ---
+
+	server.tool(
+		"agentation_mobile_export",
+		"Export session annotations as JSON or Markdown",
+		{
+			sessionId: z.string().describe("Session ID"),
+			format: z.enum(["json", "markdown"]).describe("Export format"),
+		},
+		async ({ sessionId, format }) => {
+			const session = store.getSession(sessionId);
+			if (!session) {
+				return { content: [{ type: "text", text: "Session not found" }], isError: true };
+			}
+			const annotations = store.getSessionAnnotations(sessionId);
+			const output =
+				format === "json"
+					? exportToJson(annotations, session)
+					: exportToMarkdown(annotations, session);
+			return { content: [{ type: "text", text: output }] };
 		},
 	);
 

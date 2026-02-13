@@ -4,6 +4,7 @@ import { AnnotationForm } from "./components/AnnotationForm";
 import { AnnotationPanel } from "./components/AnnotationPanel";
 import { DeviceSelector } from "./components/DeviceSelector";
 import { ElementTreePanel } from "./components/ElementTreePanel";
+import { ExportMenu } from "./components/ExportMenu";
 import { ScreenMirror } from "./components/ScreenMirror";
 import { ThreadView } from "./components/ThreadView";
 import { useAnnotations } from "./hooks/use-annotations";
@@ -258,7 +259,10 @@ export function App() {
 								/>
 							</svg>
 						</div>
-						<h1 className="text-balance text-sm font-semibold tracking-tight">agentation-mobile</h1>
+						<h1 className="flex-1 text-balance text-sm font-semibold tracking-tight">
+							agentation-mobile
+						</h1>
+						<ExportMenu sessionId={activeSessionId} disabled={annotations.length === 0} />
 					</div>
 
 					<DeviceSelector

@@ -395,6 +395,49 @@ export class AndroidBridge implements IPlatformBridge {
 		return bestMatch;
 	}
 
+	async connectWifi(host: string, port = 5555): Promise<{ success: boolean; message: string }> {
+		try {
+			const { stdout } = await execFile("adb", ["connect", `${host}:${port}`], {
+				timeout: ADB_TIMEOUT,
+			});
+			const output = stdout.trim();
+			const success = output.includes("connected") && !output.includes("failed");
+			return { success, message: output };
+		} catch (err) {
+			return { success: false, message: `${err}` };
+		}
+	}
+
+	async pairDevice(
+		host: string,
+		port: number,
+		code: string,
+	): Promise<{ success: boolean; message: string }> {
+		try {
+			const { stdout } = await execFile("adb", ["pair", `${host}:${port}`, code], {
+				timeout: ADB_TIMEOUT,
+			});
+			const output = stdout.trim();
+			const success = output.includes("Successfully paired");
+			return { success, message: output };
+		} catch (err) {
+			return { success: false, message: `${err}` };
+		}
+	}
+
+	async disconnectDevice(deviceId: string): Promise<{ success: boolean; message: string }> {
+		try {
+			const { stdout } = await execFile("adb", ["disconnect", deviceId], {
+				timeout: ADB_TIMEOUT,
+			});
+			const output = stdout.trim();
+			const success = output.includes("disconnected");
+			return { success, message: output };
+		} catch (err) {
+			return { success: false, message: `${err}` };
+		}
+	}
+
 	/**
 	 * Parse the UIAutomator XML dump into a flat list of MobileElement objects.
 	 */

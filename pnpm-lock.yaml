@@ -115,6 +115,9 @@ importers:
       '@agentation-mobile/bridge-android':
         specifier: workspace:*
         version: link:../bridges/bridge-android
+      '@agentation-mobile/bridge-flutter':
+        specifier: workspace:*
+        version: link:../bridges/bridge-flutter
       '@agentation-mobile/bridge-ios':
         specifier: workspace:*
         version: link:../bridges/bridge-ios
@@ -136,6 +139,9 @@ importers:
       commander:
         specifier: ^12.1.0
         version: 12.1.0
+      express:
+        specifier: ^4.21.1
+        version: 4.22.1
     devDependencies:
       tsup:
         specifier: ^8.3.5
@@ -171,6 +177,9 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: ^1.4.0
         version: 1.26.0(zod@3.25.76)
+      express:
+        specifier: ^4.21.1
+        version: 4.22.1
       zod:
         specifier: ^3.24.1
         version: 3.25.76
@@ -182,6 +191,9 @@ importers:
         specifier: workspace:*
         version: link:../bridges/bridge-react-native
     devDependencies:
+      '@types/express':
+        specifier: ^5.0.0
+        version: 5.0.6
       '@types/node':
         specifier: ^22.10.5
         version: 22.19.11

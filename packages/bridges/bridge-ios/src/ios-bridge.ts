@@ -112,6 +112,24 @@ interface SimctlDeviceListOutput {
 	>;
 }
 
+interface DevicectlOutput {
+	result?: {
+		devices?: Array<{
+			identifier: string;
+			connectionProperties?: {
+				transportType?: string;
+			};
+			deviceProperties?: {
+				name?: string;
+				osVersionNumber?: string;
+			};
+			hardwareProperties?: {
+				udid?: string;
+			};
+		}>;
+	};
+}
+
 /**
  * Represents a parsed line from the iOS accessibility hierarchy output.
  */
@@ -305,37 +323,80 @@ export class IosBridge implements IPlatformBridge {
 	}
 
 	/**
-	 * Discover all booted iOS simulators via `xcrun simctl list devices -j`.
-	 * For each booted device, resolves screen dimensions from known device sizes.
+	 * Discover all booted iOS simulators via `xcrun simctl list devices -j`
+	 * and physical devices via `xcrun devicectl list devices`.
 	 */
 	async listDevices(): Promise<DeviceInfo[]> {
-		const { stdout } = await execFile("xcrun", ["simctl", "list", "devices", "-j"], {
-			timeout: SIMCTL_TIMEOUT,
-		});
-
-		const parsed: SimctlDeviceListOutput = JSON.parse(stdout);
 		const devices: DeviceInfo[] = [];
 
-		for (const [runtime, deviceList] of Object.entries(parsed.devices)) {
-			const osVersion = parseOsVersion(runtime);
+		// 1. Simulators via simctl
+		try {
+			const { stdout } = await execFile("xcrun", ["simctl", "list", "devices", "-j"], {
+				timeout: SIMCTL_TIMEOUT,
+			});
+
+			const parsed: SimctlDeviceListOutput = JSON.parse(stdout);
+
+			for (const [runtime, deviceList] of Object.entries(parsed.devices)) {
+				const osVersion = parseOsVersion(runtime);
+
+				for (const device of deviceList) {
+					if (device.state !== "Booted") continue;
+					if (device.isAvailable === false) continue;
+
+					const screenSize = resolveScreenSize(device.name);
+
+					devices.push({
+						id: device.udid,
+						name: device.name,
+						platform: "ios-native",
+						isEmulator: true,
+						osVersion,
+						screenWidth: screenSize.width,
+						screenHeight: screenSize.height,
+					});
+				}
+			}
+		} catch {
+			// simctl not available
+		}
+
+		// 2. Physical devices via devicectl (Xcode 15+)
+		try {
+			const { stdout } = await execFile(
+				"xcrun",
+				["devicectl", "list", "devices", "--json-output", "/dev/stdout"],
+				{ timeout: SIMCTL_TIMEOUT },
+			);
+			const parsed = JSON.parse(stdout) as DevicectlOutput;
+			const deviceList = parsed?.result?.devices ?? [];
 
 			for (const device of deviceList) {
-				// Only include booted and available simulators
-				if (device.state !== "Booted") continue;
-				if (device.isAvailable === false) continue;
+				if (
+					device.connectionProperties?.transportType !== "wired" &&
+					device.connectionProperties?.transportType !== "localNetwork"
+				)
+					continue;
 
-				const screenSize = resolveScreenSize(device.name);
+				const name = device.deviceProperties?.name ?? "Unknown iOS Device";
+				const osVersion = device.deviceProperties?.osVersionNumber ?? "unknown";
+				const udid = device.hardwareProperties?.udid ?? device.identifier;
+				const screenSize = resolveScreenSize(name);
+
+				if (devices.some((d) => d.id === udid)) continue;
 
 				devices.push({
-					id: device.udid,
-					name: device.name,
+					id: udid,
+					name,
 					platform: "ios-native",
-					isEmulator: true,
+					isEmulator: false,
 					osVersion,
 					screenWidth: screenSize.width,
 					screenHeight: screenSize.height,
 				});
 			}
+		} catch {
+			// devicectl not available (pre-Xcode 15)
 		}
 
 		return devices;

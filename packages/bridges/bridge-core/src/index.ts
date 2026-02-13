@@ -27,6 +27,19 @@ export interface IPlatformBridge {
 
 	/** Check if the bridge is available (tools installed, etc.) */
 	isAvailable(): Promise<boolean>;
+
+	/** Connect to a device over WiFi (optional, not all bridges support it) */
+	connectWifi?(host: string, port?: number): Promise<{ success: boolean; message: string }>;
+
+	/** Pair with a device for WiFi debugging (optional, Android 11+) */
+	pairDevice?(
+		host: string,
+		port: number,
+		code: string,
+	): Promise<{ success: boolean; message: string }>;
+
+	/** Disconnect a WiFi-connected device (optional) */
+	disconnectDevice?(deviceId: string): Promise<{ success: boolean; message: string }>;
 }
 
 export type { DeviceInfo as Device };

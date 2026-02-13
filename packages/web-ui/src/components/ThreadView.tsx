@@ -1,6 +1,8 @@
 import { useState } from "react";
+import { getBaseUrl } from "../api";
 import type { MobileAnnotation } from "../types";
 import { cn } from "../utils";
+import { ScreenshotDiff } from "./ScreenshotDiff";
 
 interface ThreadViewProps {
 	annotation: MobileAnnotation;
@@ -110,6 +112,17 @@ export function ThreadView({ annotation, onReply, onClose, onUpdateStatus }: Thr
 					</span>
 				</div>
 			</div>
+
+			{/* Screenshot diff */}
+			{annotation.screenshotId && annotation.resolvedScreenshotId && (
+				<div className="border-b border-neutral-800 px-4 py-3">
+					<ScreenshotDiff
+						beforeId={annotation.screenshotId}
+						afterId={annotation.resolvedScreenshotId}
+						serverUrl={getBaseUrl()}
+					/>
+				</div>
+			)}
 
 			{/* Status actions */}
 			{annotation.status !== "resolved" && annotation.status !== "dismissed" && (

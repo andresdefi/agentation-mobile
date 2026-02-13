@@ -43,5 +43,40 @@ export function createSessionRoutes(store: Store, eventBus: EventBus): Router {
 		res.json(store.getPendingAnnotations(session.id));
 	});
 
+	// Add device to session
+	router.post("/:id/devices", (req, res) => {
+		const { deviceId, platform } = req.body;
+		if (!deviceId || !platform) {
+			res.status(400).json({ error: "deviceId and platform required" });
+			return;
+		}
+		const session = store.addDeviceToSession(req.params.id, deviceId, platform);
+		if (!session) {
+			res.status(404).json({ error: "Session not found" });
+			return;
+		}
+		res.json(session);
+	});
+
+	// Remove device from session
+	router.delete("/:id/devices/:deviceId", (req, res) => {
+		const session = store.removeDeviceFromSession(req.params.id, req.params.deviceId);
+		if (!session) {
+			res.status(404).json({ error: "Session not found" });
+			return;
+		}
+		res.json(session);
+	});
+
+	// Get annotations filtered by device
+	router.get("/:id/devices/:deviceId/annotations", (req, res) => {
+		const session = store.getSession(req.params.id);
+		if (!session) {
+			res.status(404).json({ error: "Session not found" });
+			return;
+		}
+		res.json(store.getSessionAnnotationsByDevice(session.id, req.params.deviceId));
+	});
+
 	return router;
 }

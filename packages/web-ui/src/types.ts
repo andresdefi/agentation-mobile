@@ -60,6 +60,7 @@ export interface MobileAnnotation {
 	screenWidth: number;
 	screenHeight: number;
 	screenshotId?: string;
+	resolvedScreenshotId?: string;
 	comment: string;
 	intent: AnnotationIntent;
 	severity: AnnotationSeverity;

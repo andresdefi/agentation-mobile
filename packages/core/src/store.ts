@@ -42,11 +42,37 @@ export class Store {
 			name: input.name,
 			deviceId: input.deviceId,
 			platform: input.platform,
+			devices: [{ deviceId: input.deviceId, platform: input.platform, addedAt: now }],
 			createdAt: now,
 			updatedAt: now,
 		};
 		this.sessions.set(session.id, session);
 		return session;
+	}
+
+	addDeviceToSession(sessionId: string, deviceId: string, platform: string): Session | undefined {
+		const session = this.sessions.get(sessionId);
+		if (!session) return undefined;
+		if (session.devices.some((d) => d.deviceId === deviceId)) return session;
+		session.devices.push({
+			deviceId,
+			platform,
+			addedAt: new Date().toISOString(),
+		});
+		session.updatedAt = new Date().toISOString();
+		return session;
+	}
+
+	removeDeviceFromSession(sessionId: string, deviceId: string): Session | undefined {
+		const session = this.sessions.get(sessionId);
+		if (!session) return undefined;
+		session.devices = session.devices.filter((d) => d.deviceId !== deviceId);
+		session.updatedAt = new Date().toISOString();
+		return session;
+	}
+
+	getSessionAnnotationsByDevice(sessionId: string, deviceId: string): MobileAnnotation[] {
+		return this.getSessionAnnotations(sessionId).filter((a) => a.deviceId === deviceId);
 	}
 
 	getSession(id: string): Session | undefined {
@@ -110,6 +136,17 @@ export class Store {
 		const annotation = this.annotations.get(id);
 		if (!annotation) return undefined;
 		annotation.thread.push(message);
+		annotation.updatedAt = new Date().toISOString();
+		return annotation;
+	}
+
+	attachResolutionScreenshot(
+		annotationId: string,
+		screenshotId: string,
+	): MobileAnnotation | undefined {
+		const annotation = this.annotations.get(annotationId);
+		if (!annotation) return undefined;
+		annotation.resolvedScreenshotId = screenshotId;
 		annotation.updatedAt = new Date().toISOString();
 		return annotation;
 	}

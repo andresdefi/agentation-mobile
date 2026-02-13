@@ -32,9 +32,10 @@ program
 
 program
 	.command("mcp")
-	.description("Start the MCP server (stdio transport)")
-	.action(async () => {
-		const { StdioServerTransport } = await import("@modelcontextprotocol/sdk/server/stdio.js");
+	.description("Start the MCP server")
+	.option("-t, --transport <type>", "Transport type (stdio or http)", "stdio")
+	.option("--port <port>", "HTTP transport port", "4748")
+	.action(async (options) => {
 		const { Store } = await import("@agentation-mobile/core");
 		const { EventBus } = await import("@agentation-mobile/server");
 		const { createMcpServer } = await import("@agentation-mobile/mcp");
@@ -44,8 +45,41 @@ program
 		const bridges = await loadBridges();
 
 		const server = createMcpServer({ store, eventBus, bridges });
-		const transport = new StdioServerTransport();
-		await server.connect(transport);
+
+		if (options.transport === "http") {
+			const { StreamableHTTPServerTransport } = await import(
+				"@modelcontextprotocol/sdk/server/streamableHttp.js"
+			);
+			const express = (await import("express")).default;
+
+			const mcpApp = express();
+			mcpApp.use(express.json());
+
+			const transport = new StreamableHTTPServerTransport({
+				sessionIdGenerator: undefined,
+			});
+
+			mcpApp.post("/mcp", async (req, res) => {
+				await transport.handleRequest(req, res, req.body);
+			});
+			mcpApp.get("/mcp", async (req, res) => {
+				await transport.handleRequest(req, res);
+			});
+			mcpApp.delete("/mcp", async (req, res) => {
+				await transport.handleRequest(req, res);
+			});
+
+			await server.connect(transport);
+
+			const mcpPort = Number(options.port);
+			mcpApp.listen(mcpPort, () => {
+				console.log(`MCP HTTP server running at http://localhost:${mcpPort}/mcp`);
+			});
+		} else {
+			const { StdioServerTransport } = await import("@modelcontextprotocol/sdk/server/stdio.js");
+			const transport = new StdioServerTransport();
+			await server.connect(transport);
+		}
 	});
 
 program
@@ -214,6 +248,132 @@ program
 		}
 	});
 
+program
+	.command("connect")
+	.description("Connect to a device over WiFi")
+	.argument("<host>", "Device IP address")
+	.option("-p, --port <port>", "ADB port", "5555")
+	.action(async (host: string, options) => {
+		const bridges = await loadBridges();
+		for (const bridge of bridges) {
+			if (bridge.connectWifi) {
+				const result = await bridge.connectWifi(host, Number(options.port));
+				console.log(result.message);
+				process.exit(result.success ? 0 : 1);
+				return;
+			}
+		}
+		console.error("No bridge supports WiFi connection. Is ADB installed?");
+		process.exit(1);
+	});
+
+program
+	.command("pair")
+	.description("Pair with an Android device for wireless debugging (Android 11+)")
+	.argument("<host>", "Device IP address")
+	.argument("<port>", "Pairing port shown on device", Number)
+	.argument("<code>", "Pairing code shown on device")
+	.action(async (host: string, port: number, code: string) => {
+		const bridges = await loadBridges();
+		for (const bridge of bridges) {
+			if (bridge.pairDevice) {
+				const result = await bridge.pairDevice(host, port, code);
+				console.log(result.message);
+				process.exit(result.success ? 0 : 1);
+				return;
+			}
+		}
+		console.error("No bridge supports device pairing. Is ADB installed?");
+		process.exit(1);
+	});
+
+program
+	.command("export")
+	.description("Export session annotations as JSON, Markdown, or GitHub issues")
+	.requiredOption("-s, --session <id>", "Session ID")
+	.option("-f, --format <format>", "Export format (json, markdown, github)", "json")
+	.option("-p, --port <port>", "Server port", "4747")
+	.option("-o, --output <path>", "Output file path (stdout if omitted)")
+	.action(async (options) => {
+		const baseUrl = `http://localhost:${options.port}`;
+		const format = options.format as string;
+
+		if (format === "github") {
+			const { formatGitHubIssueBody } = await import("@agentation-mobile/core");
+			const { execFile } = await import("node:child_process");
+			const { promisify } = await import("node:util");
+			const execFileAsync = promisify(execFile);
+
+			const sessionRes = await fetch(`${baseUrl}/api/sessions/${options.session}`);
+			if (!sessionRes.ok) {
+				console.error(`Failed to fetch session: ${sessionRes.status}`);
+				process.exit(1);
+			}
+			const sessionData = (await sessionRes.json()) as {
+				id: string;
+				name: string;
+				deviceId: string;
+				platform: string;
+				createdAt: string;
+				updatedAt: string;
+				annotations: Array<{
+					id: string;
+					comment: string;
+					intent: string;
+					severity: string;
+					[key: string]: unknown;
+				}>;
+			};
+			const { annotations, ...session } = sessionData;
+
+			if (annotations.length === 0) {
+				console.log("No annotations to export.");
+				return;
+			}
+
+			for (const annotation of annotations) {
+				const title = `[${annotation.severity}] ${annotation.intent}: ${annotation.comment}`;
+				const body = formatGitHubIssueBody(
+					annotation as Parameters<typeof formatGitHubIssueBody>[0],
+					session as Parameters<typeof formatGitHubIssueBody>[1],
+				);
+				try {
+					await execFileAsync("gh", ["issue", "create", "--title", title, "--body", body]);
+					console.log(`Created issue for annotation ${annotation.id}`);
+				} catch {
+					console.error(`Failed to create issue for annotation ${annotation.id}`);
+				}
+			}
+			return;
+		}
+
+		const exportFormat = format === "markdown" ? "markdown" : "json";
+		const url = `${baseUrl}/api/sessions/${options.session}/export?format=${exportFormat}`;
+
+		try {
+			const res = await fetch(url);
+			if (!res.ok) {
+				console.error(`Server returned ${res.status}: ${res.statusText}`);
+				process.exit(1);
+			}
+			const content = await res.text();
+
+			if (options.output) {
+				await writeFile(options.output, content, "utf-8");
+				console.log(`Exported to ${options.output}`);
+			} else {
+				process.stdout.write(content);
+			}
+		} catch (err) {
+			if (err instanceof TypeError && (err as NodeJS.ErrnoException).cause) {
+				console.error(`Could not connect to server on port ${options.port}. Is it running?`);
+			} else {
+				console.error(`Could not connect to server on port ${options.port}. Is it running?`);
+			}
+			process.exit(1);
+		}
+	});
+
 program.parse();
 
 async function loadBridges() {
@@ -236,6 +396,13 @@ async function loadBridges() {
 		const { IosBridge } = await import("@agentation-mobile/bridge-ios");
 		const ios = new IosBridge();
 		if (await ios.isAvailable()) bridges.push(ios);
+	} catch {
+		/* not available */
+	}
+	try {
+		const { FlutterBridge } = await import("@agentation-mobile/bridge-flutter");
+		const flutter = new FlutterBridge();
+		if (await flutter.isAvailable()) bridges.push(flutter);
 	} catch {
 		/* not available */
 	}

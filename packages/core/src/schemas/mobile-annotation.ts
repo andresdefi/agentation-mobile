@@ -18,6 +18,7 @@ export const MobileAnnotationSchema = z.object({
 	screenWidth: z.number(),
 	screenHeight: z.number(),
 	screenshotId: z.string().optional(),
+	resolvedScreenshotId: z.string().optional(),
 	comment: z.string(),
 	intent: AnnotationIntentSchema,
 	severity: AnnotationSeveritySchema,

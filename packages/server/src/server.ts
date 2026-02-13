@@ -1,6 +1,6 @@
 import { type Server as HttpServer, createServer as createHttpServer } from "node:http";
 import type { DeviceInfo, IPlatformBridge } from "@agentation-mobile/bridge-core";
-import { Store } from "@agentation-mobile/core";
+import { Store, exportToJson, exportToMarkdown } from "@agentation-mobile/core";
 import cors from "cors";
 import express, { type Express } from "express";
 import { WebSocket, WebSocketServer } from "ws";
@@ -53,6 +53,28 @@ export function createServer(config: ServerConfig = {}): Server {
 	app.use("/api/devices", createDeviceRoutes(bridges));
 	app.use("/api/events", createSSERouter(eventBus));
 
+	// Export endpoint
+	app.get("/api/sessions/:id/export", (req, res) => {
+		const session = store.getSession(req.params.id);
+		if (!session) {
+			res.status(404).json({ error: "Session not found" });
+			return;
+		}
+		const annotations = store.getSessionAnnotations(session.id);
+		const format = req.query.format as string;
+
+		if (format === "markdown") {
+			const md = exportToMarkdown(annotations, session);
+			res.setHeader("Content-Type", "text/markdown; charset=utf-8");
+			res.send(md);
+			return;
+		}
+
+		const json = exportToJson(annotations, session);
+		res.setHeader("Content-Type", "application/json; charset=utf-8");
+		res.send(json);
+	});
+
 	// Screenshot capture endpoint
 	app.post("/api/capture/:deviceId", async (req, res) => {
 		const { deviceId } = req.params;
@@ -69,6 +91,27 @@ export function createServer(config: ServerConfig = {}): Server {
 		} catch (err) {
 			res.status(500).json({ error: `Capture failed: ${err}` });
 		}
+	});
+
+	// Attach resolution screenshot to annotation
+	app.post("/api/annotations/:id/resolve-screenshot", (req, res) => {
+		const { id } = req.params;
+		const { screenshot } = req.body;
+		if (!screenshot || typeof screenshot !== "string") {
+			res.status(400).json({ error: "screenshot (base64 PNG string) required in body" });
+			return;
+		}
+		const annotation = store.getAnnotation(id);
+		if (!annotation) {
+			res.status(404).json({ error: "Annotation not found" });
+			return;
+		}
+		const buffer = Buffer.from(screenshot, "base64");
+		const screenshotId = crypto.randomUUID();
+		store.storeScreenshot(screenshotId, buffer);
+		store.attachResolutionScreenshot(id, screenshotId);
+		eventBus.emit("annotation:status", store.getAnnotation(id)!);
+		res.json({ screenshotId, annotationId: id });
 	});
 
 	// Screenshot retrieval
