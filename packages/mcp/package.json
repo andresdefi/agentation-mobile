@@ -23,8 +23,14 @@
   },
   "dependencies": {
     "@agentation-mobile/core": "workspace:*",
+    "@agentation-mobile/bridge-core": "workspace:*",
     "@agentation-mobile/server": "workspace:*",
-    "@modelcontextprotocol/sdk": "^1.4.0"
+    "@modelcontextprotocol/sdk": "^1.4.0",
+    "zod": "^3.24.1"
+  },
+  "optionalDependencies": {
+    "@agentation-mobile/bridge-android": "workspace:*",
+    "@agentation-mobile/bridge-react-native": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.10.5",

@@ -13,6 +13,9 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
+    "@agentation-mobile/core": "workspace:*",
+    "@agentation-mobile/bridge-android": "workspace:*",
+    "@agentation-mobile/bridge-react-native": "workspace:*",
     "@agentation-mobile/server": "workspace:*",
     "@agentation-mobile/mcp": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.4.0",
