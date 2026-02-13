@@ -277,6 +277,7 @@ export function App() {
 				{sidebarView !== "thread" && (
 					<div className="flex border-b border-neutral-800">
 						<button
+							type="button"
 							onClick={() => setSidebarTab("annotations")}
 							className={cn(
 								"flex-1 px-4 py-2 text-xs font-medium transition-colors",
@@ -288,6 +289,7 @@ export function App() {
 							Annotations
 						</button>
 						<button
+							type="button"
 							onClick={() => setSidebarTab("elements")}
 							className={cn(
 								"flex-1 px-4 py-2 text-xs font-medium transition-colors",

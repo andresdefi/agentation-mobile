@@ -1,7 +1,17 @@
 {
 	"name": "@agentation-mobile/react-native-sdk",
 	"version": "0.1.0",
-	"private": true,
+	"description": "In-app dev overlay SDK for React Native",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/andresdefi/agentation-mobile.git",
+		"directory": "sdks/react-native"
+	},
+	"keywords": ["agentation", "mobile", "react-native", "sdk", "dev-overlay"],
+	"publishConfig": {
+		"access": "public"
+	},
 	"type": "module",
 	"exports": {
 		".": {

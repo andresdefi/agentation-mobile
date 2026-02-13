@@ -45,6 +45,7 @@ function FilterChip({
 }) {
 	return (
 		<button
+			type="button"
 			onClick={onClick}
 			className={cn(
 				"rounded-md px-2 py-0.5 text-xs transition-colors",
@@ -116,6 +117,7 @@ export function AnnotationFilters({ filters, onFiltersChange }: AnnotationFilter
 			{/* Clear filters */}
 			{hasActiveFilters && (
 				<button
+					type="button"
 					onClick={() => onFiltersChange({ status: null, intent: null, severity: null })}
 					className="self-start text-xs text-neutral-600 hover:text-neutral-400"
 				>

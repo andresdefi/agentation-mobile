@@ -533,9 +533,9 @@ function parseUiAutomatorXml(xml: string): MobileElement[] {
 	let idCounter = 0;
 
 	const nodeRegex = /<node\s([^>]+)\/?>/g;
-	let match: RegExpExecArray | null;
+	let match: RegExpExecArray | null = nodeRegex.exec(xml);
 
-	while ((match = nodeRegex.exec(xml)) !== null) {
+	while (match !== null) {
 		const attrs = match[1];
 		const className = extractAttr(attrs, "class") ?? "Unknown";
 		const text = extractAttr(attrs, "text");
@@ -566,6 +566,8 @@ function parseUiAutomatorXml(xml: string): MobileElement[] {
 				traits: undefined,
 			},
 		});
+
+		match = nodeRegex.exec(xml);
 	}
 
 	return elements;

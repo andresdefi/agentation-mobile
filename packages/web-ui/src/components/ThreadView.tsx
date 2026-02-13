@@ -74,6 +74,7 @@ export function ThreadView({ annotation, onReply, onClose, onUpdateStatus }: Thr
 			<div className="flex items-center justify-between border-b border-neutral-800 px-4 py-3">
 				<div className="flex items-center gap-2">
 					<button
+						type="button"
 						onClick={onClose}
 						className="rounded-lg p-1 text-neutral-400 transition-colors hover:bg-neutral-800 hover:text-neutral-200"
 						aria-label="Close thread"
@@ -129,6 +130,7 @@ export function ThreadView({ annotation, onReply, onClose, onUpdateStatus }: Thr
 				<div className="flex gap-2 border-b border-neutral-800 px-4 py-2">
 					{annotation.status === "pending" && (
 						<button
+							type="button"
 							onClick={() => onUpdateStatus(annotation.id, "acknowledge")}
 							className="rounded-md bg-blue-500/10 px-2.5 py-1 text-xs font-medium text-blue-400 transition-colors hover:bg-blue-500/20"
 						>
@@ -136,12 +138,14 @@ export function ThreadView({ annotation, onReply, onClose, onUpdateStatus }: Thr
 						</button>
 					)}
 					<button
+						type="button"
 						onClick={() => onUpdateStatus(annotation.id, "resolve")}
 						className="rounded-md bg-green-500/10 px-2.5 py-1 text-xs font-medium text-green-400 transition-colors hover:bg-green-500/20"
 					>
 						Resolve
 					</button>
 					<button
+						type="button"
 						onClick={() => onUpdateStatus(annotation.id, "dismiss")}
 						className="rounded-md bg-neutral-500/10 px-2.5 py-1 text-xs font-medium text-neutral-400 transition-colors hover:bg-neutral-500/20"
 					>

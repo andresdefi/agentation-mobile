@@ -1,7 +1,17 @@
 {
 	"name": "@agentation-mobile/mcp",
 	"version": "0.1.0",
-	"private": true,
+	"description": "MCP server for agentation-mobile with stdio and HTTP transport",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/andresdefi/agentation-mobile.git",
+		"directory": "packages/mcp"
+	},
+	"keywords": ["agentation", "mobile", "annotation", "mcp", "ai-agent", "model-context-protocol"],
+	"publishConfig": {
+		"access": "public"
+	},
 	"type": "module",
 	"exports": {
 		".": {
@@ -19,7 +29,8 @@
 	"scripts": {
 		"build": "tsup",
 		"dev": "tsup --watch",
-		"clean": "rm -rf dist"
+		"clean": "rm -rf dist",
+		"test": "vitest run --passWithNoTests"
 	},
 	"dependencies": {
 		"@agentation-mobile/core": "workspace:*",
@@ -36,6 +47,7 @@
 	"devDependencies": {
 		"@types/express": "^5.0.0",
 		"@types/node": "^22.10.5",
-		"tsup": "^8.3.5"
+		"tsup": "^8.3.5",
+		"vitest": "^2.1.8"
 	}
 }

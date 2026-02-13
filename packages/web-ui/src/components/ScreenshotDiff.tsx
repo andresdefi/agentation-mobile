@@ -57,6 +57,7 @@ export function ScreenshotDiff({ beforeId, afterId, serverUrl }: ScreenshotDiffP
 				{beforeSrc && afterSrc && (
 					<div className="flex gap-1 rounded-md bg-neutral-900 p-0.5">
 						<button
+							type="button"
 							onClick={() => setMode("side-by-side")}
 							className={cn(
 								"rounded px-2 py-0.5 text-xs font-medium transition-colors",
@@ -68,6 +69,7 @@ export function ScreenshotDiff({ beforeId, afterId, serverUrl }: ScreenshotDiffP
 							Side by side
 						</button>
 						<button
+							type="button"
 							onClick={() => setMode("slider")}
 							className={cn(
 								"rounded px-2 py-0.5 text-xs font-medium transition-colors",

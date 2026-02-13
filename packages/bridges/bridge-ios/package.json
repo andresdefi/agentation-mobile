@@ -1,7 +1,17 @@
 {
 	"name": "@agentation-mobile/bridge-ios",
 	"version": "0.1.0",
-	"private": true,
+	"description": "iOS platform bridge for agentation-mobile (xcrun simctl + accessibility)",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/andresdefi/agentation-mobile.git",
+		"directory": "packages/bridges/bridge-ios"
+	},
+	"keywords": ["agentation", "mobile", "bridge", "ios", "simctl"],
+	"publishConfig": {
+		"access": "public"
+	},
 	"type": "module",
 	"exports": {
 		".": {

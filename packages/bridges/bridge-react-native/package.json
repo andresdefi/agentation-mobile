@@ -1,7 +1,17 @@
 {
 	"name": "@agentation-mobile/bridge-react-native",
 	"version": "0.1.0",
-	"private": true,
+	"description": "React Native platform bridge for agentation-mobile (CDP/Hermes)",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/andresdefi/agentation-mobile.git",
+		"directory": "packages/bridges/bridge-react-native"
+	},
+	"keywords": ["agentation", "mobile", "bridge", "react-native", "hermes"],
+	"publishConfig": {
+		"access": "public"
+	},
 	"type": "module",
 	"exports": {
 		".": {

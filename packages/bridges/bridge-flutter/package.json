@@ -1,7 +1,17 @@
 {
 	"name": "@agentation-mobile/bridge-flutter",
 	"version": "0.1.0",
-	"private": true,
+	"description": "Flutter platform bridge for agentation-mobile (Dart VM Service)",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/andresdefi/agentation-mobile.git",
+		"directory": "packages/bridges/bridge-flutter"
+	},
+	"keywords": ["agentation", "mobile", "bridge", "flutter", "dart"],
+	"publishConfig": {
+		"access": "public"
+	},
 	"type": "module",
 	"exports": {
 		".": {

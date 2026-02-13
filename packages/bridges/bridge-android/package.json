@@ -1,7 +1,17 @@
 {
 	"name": "@agentation-mobile/bridge-android",
 	"version": "0.1.0",
-	"private": true,
+	"description": "Android platform bridge for agentation-mobile (ADB + UIAutomator)",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/andresdefi/agentation-mobile.git",
+		"directory": "packages/bridges/bridge-android"
+	},
+	"keywords": ["agentation", "mobile", "bridge", "android", "adb"],
+	"publishConfig": {
+		"access": "public"
+	},
 	"type": "module",
 	"exports": {
 		".": {

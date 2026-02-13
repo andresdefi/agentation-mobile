@@ -45,6 +45,7 @@ function TreeNode({
 	return (
 		<div>
 			<button
+				type="button"
 				onClick={() => onSelectElement(element)}
 				className={cn(
 					"flex w-full items-center gap-1 rounded px-1.5 py-1 text-left text-xs transition-colors hover:bg-neutral-800",
@@ -57,6 +58,12 @@ function TreeNode({
 						onClick={(e) => {
 							e.stopPropagation();
 							setExpanded(!expanded);
+						}}
+						onKeyDown={(e) => {
+							if (e.key === "Enter" || e.key === " ") {
+								e.stopPropagation();
+								setExpanded(!expanded);
+							}
 						}}
 						className="flex size-4 shrink-0 cursor-pointer items-center justify-center rounded text-neutral-500 hover:bg-neutral-700 hover:text-neutral-300"
 					>
@@ -185,6 +192,7 @@ export function ElementTreePanel({
 			<div className="flex flex-col gap-2 px-4 py-8 text-center">
 				<p className="text-xs text-red-400">{error}</p>
 				<button
+					type="button"
 					onClick={onRefresh}
 					className="mx-auto rounded-md bg-neutral-800 px-3 py-1 text-xs text-neutral-400 transition-colors hover:bg-neutral-700"
 				>
@@ -201,6 +209,7 @@ export function ElementTreePanel({
 					No elements found. Make sure a device is connected and running an app.
 				</p>
 				<button
+					type="button"
 					onClick={onRefresh}
 					className="mx-auto rounded-md bg-neutral-800 px-3 py-1 text-xs text-neutral-400 transition-colors hover:bg-neutral-700"
 				>
@@ -222,6 +231,7 @@ export function ElementTreePanel({
 						{elements.length}
 					</span>
 					<button
+						type="button"
 						onClick={onRefresh}
 						className="rounded p-1 text-neutral-500 transition-colors hover:bg-neutral-800 hover:text-neutral-300"
 						aria-label="Refresh element tree"

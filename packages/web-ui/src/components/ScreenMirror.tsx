@@ -138,7 +138,17 @@ export function ScreenMirror({
 				{frameUrl && (
 					<>
 						{/* Clickable overlay area exactly matching the image */}
-						<div className="absolute inset-0 z-10 cursor-crosshair" onClick={handleClick} />
+						<div
+							className="absolute inset-0 z-10 cursor-crosshair"
+							role="button"
+							tabIndex={0}
+							onClick={handleClick}
+							onKeyDown={(e) => {
+								if (e.key === "Enter" || e.key === " ") {
+									handleClick(e as unknown as React.MouseEvent<HTMLDivElement>);
+								}
+							}}
+						/>
 
 						<img
 							ref={imageRef}
@@ -151,6 +161,7 @@ export function ScreenMirror({
 						{/* Annotation pins */}
 						{annotations.map((annotation) => (
 							<button
+								type="button"
 								key={annotation.id}
 								onClick={(e) => {
 									e.stopPropagation();

@@ -110,7 +110,10 @@ export function createServer(config: ServerConfig = {}): Server {
 		const screenshotId = crypto.randomUUID();
 		store.storeScreenshot(screenshotId, buffer);
 		store.attachResolutionScreenshot(id, screenshotId);
-		eventBus.emit("annotation:status", store.getAnnotation(id)!);
+		const updated = store.getAnnotation(id);
+		if (updated) {
+			eventBus.emit("annotation:status", updated);
+		}
 		res.json({ screenshotId, annotationId: id });
 	});
 

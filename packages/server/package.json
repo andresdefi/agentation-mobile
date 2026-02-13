@@ -1,7 +1,17 @@
 {
 	"name": "@agentation-mobile/server",
 	"version": "0.1.0",
-	"private": true,
+	"description": "HTTP API server, SSE events, and WebSocket screen feed for agentation-mobile",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/andresdefi/agentation-mobile.git",
+		"directory": "packages/server"
+	},
+	"keywords": ["agentation", "mobile", "annotation", "server"],
+	"publishConfig": {
+		"access": "public"
+	},
 	"type": "module",
 	"exports": {
 		".": {

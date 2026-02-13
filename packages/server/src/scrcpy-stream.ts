@@ -160,7 +160,9 @@ export class ScrcpyStream extends EventEmitter {
 		);
 
 		// Wire scrcpy stdout -> ffmpeg stdin
-		scrcpy.stdout?.pipe(ffmpeg.stdin!);
+		if (ffmpeg.stdin) {
+			scrcpy.stdout?.pipe(ffmpeg.stdin);
+		}
 
 		// Keep a reference for cleanup (kill scrcpy -> ffmpeg will end too)
 		this.process = scrcpy;

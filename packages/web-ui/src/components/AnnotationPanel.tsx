@@ -137,6 +137,7 @@ export function AnnotationPanel({
 		<div className="flex flex-col gap-1.5 overflow-y-auto px-2 py-2">
 			{sorted.map((annotation) => (
 				<button
+					type="button"
 					key={annotation.id}
 					onClick={() => onSelectAnnotation(annotation)}
 					className={cn(

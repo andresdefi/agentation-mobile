@@ -19,7 +19,8 @@
 		"test": "turbo test",
 		"check": "biome check .",
 		"check:fix": "biome check --fix .",
-		"clean": "turbo clean"
+		"clean": "turbo clean",
+		"publish:all": "turbo build && pnpm -r --filter '!@agentation-mobile/web-ui' --filter '!@agentation-mobile/flutter-sdk' publish --no-git-checks"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^1.9.4",

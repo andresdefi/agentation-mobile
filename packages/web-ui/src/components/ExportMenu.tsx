@@ -49,6 +49,7 @@ export function ExportMenu({ sessionId, disabled }: ExportMenuProps) {
 	return (
 		<div className="relative" ref={menuRef}>
 			<button
+				type="button"
 				onClick={() => setOpen((prev) => !prev)}
 				onBlur={(e) => {
 					if (!menuRef.current?.contains(e.relatedTarget as Node)) {
@@ -77,6 +78,7 @@ export function ExportMenu({ sessionId, disabled }: ExportMenuProps) {
 			{open && (
 				<div className="absolute right-0 top-full z-50 mt-1 w-44 rounded-lg border border-neutral-700 bg-neutral-800 py-1 shadow-lg">
 					<button
+						type="button"
 						onMouseDown={(e) => e.preventDefault()}
 						onClick={() => handleExport("json")}
 						className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-neutral-300 hover:bg-neutral-700 hover:text-neutral-100"
@@ -97,6 +99,7 @@ export function ExportMenu({ sessionId, disabled }: ExportMenuProps) {
 						Export as JSON
 					</button>
 					<button
+						type="button"
 						onMouseDown={(e) => e.preventDefault()}
 						onClick={() => handleExport("markdown")}
 						className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-neutral-300 hover:bg-neutral-700 hover:text-neutral-100"

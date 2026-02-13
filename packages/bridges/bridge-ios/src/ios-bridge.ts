@@ -216,7 +216,6 @@ function parseAccessibilityOutput(output: string): AccessibilityNode[] {
 					width: Number.parseFloat(frameMatch[3]),
 					height: Number.parseFloat(frameMatch[4]),
 				};
-				continue;
 			}
 		}
 	}
