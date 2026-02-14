@@ -86,7 +86,8 @@ export function createServer(config: ServerConfig = {}): Server {
 	// Screenshot capture endpoint
 	app.post("/api/capture/:deviceId", async (req, res) => {
 		const { deviceId } = req.params;
-		const bridge = await findBridgeForDevice(bridges, deviceId);
+		const platform = req.query.platform as string | undefined;
+		const bridge = await findBridgeForDevice(bridges, deviceId, platform);
 		if (!bridge) {
 			res.status(404).json({ error: "Device not found" });
 			return;
@@ -139,14 +140,18 @@ export function createServer(config: ServerConfig = {}): Server {
 	// Element tree endpoint
 	app.get("/api/devices/:deviceId/elements", async (req, res) => {
 		const { deviceId } = req.params;
-		const bridge = await findBridgeForDevice(bridges, deviceId);
+		const platform = req.query.platform as string | undefined;
+		console.log(`[elements] GET /api/devices/${deviceId}/elements?platform=${platform}`);
+		const bridge = await findBridgeForDevice(bridges, deviceId, platform);
 		if (!bridge) {
 			res.status(404).json({ error: "Device not found" });
 			return;
 		}
 		try {
 			const elements = await bridge.getElementTree(deviceId);
-			res.json(elements);
+			const screenId = bridge.getScreenId ? await bridge.getScreenId(deviceId) : null;
+			console.log(`[elements] screenId=${screenId} elements=${elements.length}`);
+			res.json({ elements, screenId });
 		} catch (err) {
 			res.status(500).json({ error: `Element tree failed: ${err}` });
 		}
@@ -161,7 +166,8 @@ export function createServer(config: ServerConfig = {}): Server {
 			res.status(400).json({ error: "x and y query params required" });
 			return;
 		}
-		const bridge = await findBridgeForDevice(bridges, deviceId);
+		const platform = req.query.platform as string | undefined;
+		const bridge = await findBridgeForDevice(bridges, deviceId, platform);
 		if (!bridge) {
 			res.status(404).json({ error: "Device not found" });
 			return;
@@ -184,6 +190,7 @@ export function createServer(config: ServerConfig = {}): Server {
 	wss.on("connection", (ws, req) => {
 		const url = new URL(req.url || "/", `http://${host}:${port}`);
 		const deviceId = url.searchParams.get("deviceId");
+		const wsPlatform = url.searchParams.get("platform") || undefined;
 		if (!deviceId) {
 			ws.close(1008, "deviceId query param required");
 			return;
@@ -194,7 +201,7 @@ export function createServer(config: ServerConfig = {}): Server {
 		let capturing = false;
 
 		const startCapture = async () => {
-			const bridge = await findBridgeForDevice(bridges, deviceId);
+			const bridge = await findBridgeForDevice(bridges, deviceId, wsPlatform);
 			if (!bridge) {
 				ws.close(1008, "Device not found");
 				return;
@@ -265,7 +272,7 @@ export function createServer(config: ServerConfig = {}): Server {
 			}
 			try {
 				const msg = JSON.parse(typeof data === "string" ? data : data.toString("utf-8"));
-				const bridge = await findBridgeForDevice(bridges, deviceId);
+				const bridge = await findBridgeForDevice(bridges, deviceId, wsPlatform);
 				if (!bridge) return;
 				switch (msg.type) {
 					case "tap":

@@ -15,6 +15,11 @@ export function isIosSimulatorId(deviceId: string): boolean {
  * Used as a fallback when dynamic resolution detection is not available.
  */
 export const IOS_SCREEN_SIZES: Record<string, { width: number; height: number }> = {
+	"iPhone 17 Pro Max": { width: 440, height: 956 },
+	"iPhone 17 Pro": { width: 402, height: 874 },
+	"iPhone 17 Plus": { width: 430, height: 932 },
+	"iPhone 17 Air": { width: 402, height: 874 },
+	"iPhone 17": { width: 393, height: 852 },
 	"iPhone 16 Pro Max": { width: 440, height: 956 },
 	"iPhone 16 Pro": { width: 402, height: 874 },
 	"iPhone 16 Plus": { width: 430, height: 932 },

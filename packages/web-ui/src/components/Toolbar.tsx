@@ -45,7 +45,7 @@ export function Toolbar({
 	return (
 		<div className="pointer-events-none absolute inset-x-0 bottom-4 z-30 flex justify-center">
 			<div className="pointer-events-auto flex items-center gap-1 rounded-xl border border-neutral-700/60 bg-neutral-900/90 px-2 py-1.5 shadow-2xl backdrop-blur-sm">
-				{/* Annotation mode group: Point | Area | Text */}
+				{/* Annotation mode: Point */}
 				<button
 					type="button"
 					onClick={() => onInteractionModeChange("point")}
@@ -58,32 +58,6 @@ export function Toolbar({
 					title="Point mode — click to annotate"
 				>
 					Point
-				</button>
-				<button
-					type="button"
-					onClick={() => onInteractionModeChange("area")}
-					className={cn(
-						"rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors",
-						interactionMode === "area"
-							? "bg-neutral-700 text-neutral-100"
-							: "text-neutral-400 hover:bg-neutral-800 hover:text-neutral-200",
-					)}
-					title="Area mode — drag to select"
-				>
-					Area
-				</button>
-				<button
-					type="button"
-					onClick={() => onInteractionModeChange("text")}
-					className={cn(
-						"rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors",
-						interactionMode === "text"
-							? "bg-neutral-700 text-neutral-100"
-							: "text-neutral-400 hover:bg-neutral-800 hover:text-neutral-200",
-					)}
-					title="Text mode — click text to annotate"
-				>
-					Text
 				</button>
 
 				<Divider />
@@ -213,31 +187,6 @@ export function Toolbar({
 						/>
 					</svg>
 					<Kbd>X</Kbd>
-				</button>
-
-				<Divider />
-
-				{/* Remote mode — separate from annotation modes */}
-				<button
-					type="button"
-					onClick={() => onInteractionModeChange("remote")}
-					className={cn(
-						"flex items-center rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors",
-						interactionMode === "remote"
-							? "bg-blue-600/30 text-blue-300"
-							: "text-neutral-400 hover:bg-neutral-800 hover:text-neutral-200",
-					)}
-					title="Remote mode — tap and swipe on device"
-					aria-label="Remote mode"
-				>
-					<svg className="size-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-						<path
-							strokeLinecap="round"
-							strokeLinejoin="round"
-							strokeWidth={2}
-							d="M15 15l-2 5L9 9l11 4-5 2zm0 0l5 5M7.188 2.239l.777 2.897M5.136 7.965l-2.898-.777M13.95 4.05l-2.122 2.122m-5.657 5.656l-2.12 2.122"
-						/>
-					</svg>
 				</button>
 
 				<Divider />

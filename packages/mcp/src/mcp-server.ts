@@ -5,6 +5,7 @@ import {
 	SourceMapResolver,
 } from "@agentation-mobile/bridge-core";
 import {
+	type MobileElement,
 	type Store,
 	exportToJson,
 	exportToMarkdown,
@@ -417,9 +418,15 @@ export function createMcpServer(deps: McpServerDeps) {
 	server.tool(
 		"agentation_mobile_get_element_tree",
 		"Get the UI element tree for the current screen of a device",
-		{ deviceId: z.string().describe("Device ID from list_devices") },
-		async ({ deviceId }) => {
-			const bridge = await findBridge(deviceId);
+		{
+			deviceId: z.string().describe("Device ID from list_devices"),
+			platform: z
+				.string()
+				.optional()
+				.describe("Platform hint (react-native, ios-native, android-native, flutter)"),
+		},
+		async ({ deviceId, platform }) => {
+			const bridge = await findBridge(deviceId, platform);
 			if (!bridge) {
 				return { content: [{ type: "text", text: "Device not found" }], isError: true };
 			}
@@ -444,9 +451,13 @@ export function createMcpServer(deps: McpServerDeps) {
 			deviceId: z.string().describe("Device ID from list_devices"),
 			x: z.number().describe("X coordinate in pixels"),
 			y: z.number().describe("Y coordinate in pixels"),
+			platform: z
+				.string()
+				.optional()
+				.describe("Platform hint (react-native, ios-native, android-native, flutter)"),
 		},
-		async ({ deviceId, x, y }) => {
-			const bridge = await findBridge(deviceId);
+		async ({ deviceId, x, y, platform }) => {
+			const bridge = await findBridge(deviceId, platform);
 			if (!bridge) {
 				return { content: [{ type: "text", text: "Device not found" }], isError: true };
 			}
@@ -466,6 +477,78 @@ export function createMcpServer(deps: McpServerDeps) {
 					isError: true,
 				};
 			}
+		},
+	);
+
+	server.tool(
+		"agentation_mobile_create_annotation",
+		"Create a new annotation on a device screen. Optionally inspects the element at the given coordinates to enrich the annotation with component data (name, file path, source location).",
+		{
+			sessionId: z.string().describe("Session ID to attach annotation to"),
+			x: z.number().describe("X coordinate as percentage (0-100) of screen width"),
+			y: z.number().describe("Y coordinate as percentage (0-100) of screen height"),
+			comment: z.string().describe("Annotation comment / feedback text"),
+			intent: z
+				.enum(["fix", "change", "question", "approve"])
+				.optional()
+				.describe("Annotation intent (default: fix)"),
+			severity: z
+				.enum(["blocking", "important", "suggestion"])
+				.optional()
+				.describe("Annotation severity (default: important)"),
+			deviceId: z.string().optional().describe("Device ID (defaults to session's device)"),
+			platform: z
+				.string()
+				.optional()
+				.describe("Platform hint (react-native, ios-native, android-native, flutter)"),
+		},
+		async ({ sessionId, x, y, comment, intent, severity, deviceId, platform }) => {
+			const session = store.getSession(sessionId);
+			if (!session) {
+				return {
+					content: [{ type: "text", text: "Session not found" }],
+					isError: true,
+				};
+			}
+
+			const resolvedDeviceId = deviceId || session.deviceId;
+			const resolvedPlatform = platform || session.platform;
+
+			// Try to inspect element at coordinates for enrichment
+			let element: MobileElement | null = null;
+			const bridge = await findBridge(resolvedDeviceId, resolvedPlatform);
+			if (bridge) {
+				try {
+					const screenWidth = 390; // reasonable default, will be overridden if available
+					const screenHeight = 844;
+					const pixelX = Math.round((x / 100) * screenWidth);
+					const pixelY = Math.round((y / 100) * screenHeight);
+					element = await bridge.inspectElement(resolvedDeviceId, pixelX, pixelY);
+				} catch {
+					// Continue without element enrichment
+				}
+			}
+
+			const annotation = store.createAnnotation({
+				sessionId,
+				x,
+				y,
+				deviceId: resolvedDeviceId,
+				platform: resolvedPlatform,
+				screenWidth: 0,
+				screenHeight: 0,
+				comment,
+				intent: intent ?? "fix",
+				severity: severity ?? "important",
+				element: element ?? undefined,
+			});
+
+			eventBus.emit("annotation:created", annotation, sessionId);
+			const enriched = enrichAnnotation(annotation as unknown as Record<string, unknown>);
+
+			return {
+				content: [{ type: "text", text: JSON.stringify(enriched, null, 2) }],
+			};
 		},
 	);
 
@@ -1130,15 +1213,28 @@ function guessPlatformFromDeviceId(deviceId: string): string | undefined {
 function createBridgeFinder(bridges: IPlatformBridge[]) {
 	const cache = new Map<string, { bridge: IPlatformBridge; expiresAt: number }>();
 
-	return async function findBridge(deviceId: string): Promise<IPlatformBridge | undefined> {
-		// Check cache first
-		const cached = cache.get(deviceId);
-		if (cached && cached.expiresAt > Date.now()) {
-			return cached.bridge;
+	function cacheKey(deviceId: string, platform?: string): string {
+		return platform ? `${deviceId}:${platform}` : deviceId;
+	}
+
+	return async function findBridge(
+		deviceId: string,
+		platform?: string,
+	): Promise<IPlatformBridge | undefined> {
+		// Check cache first (platform-specific key takes precedence)
+		if (platform) {
+			const cached = cache.get(cacheKey(deviceId, platform));
+			if (cached && cached.expiresAt > Date.now()) {
+				return cached.bridge;
+			}
+		}
+		const cachedGeneric = cache.get(deviceId);
+		if (!platform && cachedGeneric && cachedGeneric.expiresAt > Date.now()) {
+			return cachedGeneric.bridge;
 		}
 
 		// Try heuristic-based ordering: put likely bridges first
-		const guess = guessPlatformFromDeviceId(deviceId);
+		const guess = platform || guessPlatformFromDeviceId(deviceId);
 		const ordered = guess
 			? [...bridges].sort((a, b) => {
 					if (a.platform === guess) return -1;
@@ -1154,9 +1250,14 @@ function createBridgeFinder(bridges: IPlatformBridge[]) {
 				const devices = await bridge.listDevices();
 				const now = Date.now();
 				for (const d of devices) {
+					cache.set(cacheKey(d.id, bridge.platform), {
+						bridge,
+						expiresAt: now + BRIDGE_CACHE_TTL,
+					});
+					// Also set generic key for backwards compat
 					cache.set(d.id, { bridge, expiresAt: now + BRIDGE_CACHE_TTL });
 				}
-				if (devices.some((d) => d.id === deviceId)) {
+				if (devices.some((d) => d.id === deviceId) && (!platform || bridge.platform === platform)) {
 					return bridge;
 				}
 			} catch {

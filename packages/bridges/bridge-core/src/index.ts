@@ -3,6 +3,14 @@ import type { AnimationInfo, MobileElement, Platform } from "@agentation-mobile/
 export { parseUiAutomatorXml, hitTestElement } from "./uiautomator";
 export { parseWmSize } from "./android-utils";
 export {
+	mergeElements,
+	findBestMatch,
+	mapRole,
+	parseAccessibilityOutput,
+	accessibilityNodesToElements,
+} from "./accessibility-merge";
+export type { AccessibilityNode } from "./accessibility-merge";
+export {
 	IOS_UDID_REGEX,
 	isIosSimulatorId,
 	IOS_SCREEN_SIZES,
@@ -32,6 +40,9 @@ export interface IPlatformBridge {
 
 	/** Get the UI element tree for the current screen */
 	getElementTree(deviceId: string): Promise<MobileElement[]>;
+
+	/** Get the current screen/route identifier (optional) */
+	getScreenId?(deviceId: string): Promise<string | null>;
 
 	/** Inspect a specific element at screen coordinates */
 	inspectElement(deviceId: string, x: number, y: number): Promise<MobileElement | null>;

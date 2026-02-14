@@ -31,10 +31,14 @@ export function getEventsUrl(): string {
 	return `${getBaseUrl()}/api/events`;
 }
 
-export function getWebSocketUrl(deviceId: string): string {
+export function getWebSocketUrl(deviceId: string, platform?: string): string {
 	const baseUrl = getBaseUrl();
 	const wsUrl = baseUrl.replace(/^http/, "ws");
-	return `${wsUrl}/ws/screen?deviceId=${encodeURIComponent(deviceId)}`;
+	let url = `${wsUrl}/ws/screen?deviceId=${encodeURIComponent(deviceId)}`;
+	if (platform) {
+		url += `&platform=${encodeURIComponent(platform)}`;
+	}
+	return url;
 }
 
 export { getBaseUrl };

@@ -150,7 +150,11 @@ export function useAnnotations(sessionId: string | null): UseAnnotationsResult {
 				method: "POST",
 				body: JSON.stringify(payload),
 			});
-			setAnnotations((prev) => [...prev, annotation]);
+			setAnnotations((prev) => {
+				// Guard against duplicates — SSE may have already added this annotation
+				if (prev.some((a) => a.id === annotation.id)) return prev;
+				return [...prev, annotation];
+			});
 			return annotation;
 		},
 		[],

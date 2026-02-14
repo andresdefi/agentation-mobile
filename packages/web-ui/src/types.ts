@@ -82,6 +82,7 @@ export interface MobileAnnotation {
 	platform: string;
 	screenWidth: number;
 	screenHeight: number;
+	screenId?: string | null;
 	screenshotId?: string;
 	resolvedScreenshotId?: string;
 	comment: string;
@@ -117,6 +118,7 @@ export interface CreateAnnotationPayload {
 	platform: string;
 	screenWidth: number;
 	screenHeight: number;
+	screenId?: string | null;
 	comment: string;
 	intent: AnnotationIntent;
 	severity: AnnotationSeverity;

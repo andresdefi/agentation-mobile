@@ -3,9 +3,12 @@ import { promisify } from "node:util";
 import {
 	type DeviceInfo,
 	type IPlatformBridge,
+	accessibilityNodesToElements,
 	hitTestElement,
 	isIosSimulatorId,
 	lookupIosScreenSize,
+	mergeElements,
+	parseAccessibilityOutput,
 	parseUiAutomatorXml,
 	parseWmSize,
 } from "@agentation-mobile/bridge-core";
@@ -331,6 +334,18 @@ const FIBER_WALK_SCRIPT = `
 
 	var elements = [];
 	var idCounter = 0;
+	var activeRoute = null;
+
+	// Extract the focused route from React Navigation's state tree
+	function getFocusedRoute(state) {
+		if (!state || !state.routes) return null;
+		var idx = typeof state.index === "number" ? state.index : state.routes.length - 1;
+		var focused = state.routes[idx];
+		if (!focused) return null;
+		// Recurse into nested navigators
+		if (focused.state) return getFocusedRoute(focused.state) || focused.name;
+		return focused.name;
+	}
 
 	function getComponentName(fiber) {
 		if (!fiber || !fiber.type) return null;
@@ -363,7 +378,56 @@ const FIBER_WALK_SCRIPT = `
 		return undefined;
 	}
 
+	function findHostFiber(fiber) {
+		if (!fiber) return null;
+		// tag 5 = HostComponent in React reconciler
+		if (fiber.tag === 5) return fiber;
+		var child = fiber.child;
+		while (child) {
+			if (child.tag === 5) return child;
+			var found = findHostFiber(child);
+			if (found) return found;
+			child = child.sibling;
+		}
+		return null;
+	}
+
 	function extractBoundingBox(fiber) {
+		// Only measure host fibers (tag 5 = HostComponent) directly.
+		// Non-host fibers (function/class components) don't own a native view,
+		// so walking down to find a child host would return the wrong bounds
+		// (e.g. a full-screen wrapper). Leave them as zeros so hit-testing
+		// skips wrappers and finds the actual native view under the cursor.
+		if (fiber.tag !== 5) {
+			return { x: 0, y: 0, width: 0, height: 0 };
+		}
+
+		// Strategy 1: Use Fabric's native measurement API (RN 0.84+)
+		try {
+			var mgr = typeof nativeFabricUIManager !== "undefined" ? nativeFabricUIManager : null;
+			if (mgr && typeof mgr.getBoundingClientRect === "function") {
+				if (fiber.stateNode && fiber.stateNode.node) {
+					var rect = mgr.getBoundingClientRect(fiber.stateNode.node, true);
+					if (rect) {
+						// Handle both array [x,y,w,h] and object {x,y,width,height} formats
+						if (Array.isArray(rect) && rect.length >= 4) {
+							var w = rect[2], h = rect[3];
+							if (w > 0 || h > 0) {
+								return { x: Math.round(rect[0]), y: Math.round(rect[1]), width: Math.round(w), height: Math.round(h) };
+							}
+						} else if (typeof rect === "object" && rect.width !== undefined) {
+							if (rect.width > 0 || rect.height > 0) {
+								return { x: Math.round(rect.x || 0), y: Math.round(rect.y || 0), width: Math.round(rect.width), height: Math.round(rect.height) };
+							}
+						}
+					}
+				}
+			}
+		} catch (e) {
+			// Fall through to style-based extraction
+		}
+
+		// Strategy 2: Fall back to inline style reading (Paper arch or absolute-position elements)
 		var props = fiber.memoizedProps || {};
 		var style = extractStyle(props);
 		if (style) {
@@ -462,10 +526,34 @@ const FIBER_WALK_SCRIPT = `
 	}
 
 	function walkFiber(fiber, depth) {
-		if (!fiber || depth > 60) return;
+		if (!fiber || depth > 200) return;
 
 		var name = getComponentName(fiber);
+
+		// Skip frozen screens — React Navigation uses Freeze/DelayedFreeze to hide
+		// inactive screens in NativeStack. When freeze=true, the screen is off-screen.
+		if ((name === "Freeze" || name === "DelayedFreeze") && fiber.memoizedProps && fiber.memoizedProps.freeze === true) {
+			return;
+		}
+
 		if (name) {
+			// Detect active route from SceneView — only use it if its navigation is focused
+			if (name === "SceneView" && fiber.memoizedProps) {
+				var sv = fiber.memoizedProps;
+				if (sv.route && sv.route.name && sv.navigation && typeof sv.navigation.isFocused === "function") {
+					if (sv.navigation.isFocused()) {
+						activeRoute = sv.route.name;
+					}
+				}
+			}
+			// Fallback: Route(name) pattern (only if no focused SceneView found yet)
+			if (!activeRoute) {
+				var routeMatch = name.match(/^Route\((.+)\)$/);
+				if (routeMatch) {
+					activeRoute = routeMatch[1];
+				}
+			}
+
 			var props = fiber.memoizedProps || {};
 			var source = fiber._debugSource;
 			var pathParts = buildPath(fiber, [name]);
@@ -528,7 +616,19 @@ const FIBER_WALK_SCRIPT = `
 		});
 	}
 
-	return JSON.stringify({ elements: elements });
+	// Compute actual viewport extent from element bounding boxes
+	var maxR = 0, maxB = 0;
+	for (var vi = 0; vi < elements.length; vi++) {
+		var vbb = elements[vi].boundingBox;
+		if (vbb) {
+			var r = vbb.x + vbb.width;
+			var b = vbb.y + vbb.height;
+			if (r > maxR) maxR = r;
+			if (b > maxB) maxB = b;
+		}
+	}
+
+	return JSON.stringify({ elements: elements, viewportWidth: maxR, viewportHeight: maxB, activeRoute: activeRoute });
 })()
 `;
 
@@ -562,6 +662,7 @@ async function getUiAutomatorTree(deviceId: string): Promise<MobileElement[]> {
 
 export class ReactNativeBridge implements IPlatformBridge {
 	readonly platform = "react-native" as const;
+	private lastActiveRoute: string | null = null;
 
 	async isAvailable(): Promise<boolean> {
 		const [metro, adb, xcrun] = await Promise.all([
@@ -664,21 +765,59 @@ export class ReactNativeBridge implements IPlatformBridge {
 		}
 	}
 
+	async getScreenId(_deviceId: string): Promise<string | null> {
+		return this.lastActiveRoute;
+	}
+
 	async getElementTree(deviceId: string): Promise<MobileElement[]> {
-		// Attempt CDP / React DevTools first — works for both Android and iOS
-		// since Metro runs on the host and serves both platforms
-		const cdpElements = await this.getElementTreeViaCdp();
-		if (cdpElements.length > 0) {
-			return cdpElements;
+		// Get fiber tree via CDP (has component names/files but bounding boxes may be zeros)
+		const cdpResult = await this.getElementTreeViaCdp();
+		this.lastActiveRoute = cdpResult.activeRoute;
+		let cdpElements = cdpResult.elements;
+
+		// Filter out elements from non-active routes (React Navigation keeps frozen
+		// screens in the fiber tree). Keep root elements and active route elements.
+		if (cdpResult.activeRoute) {
+			const activeRouteTag = `Route(${cdpResult.activeRoute})`;
+			cdpElements = cdpElements.filter((el) => {
+				const path = el.componentPath;
+				// Keep elements with no route in their path (root layout, shared UI)
+				if (!path.includes("Route(")) return true;
+				// Keep if the LAST Route(...) in the path matches the active route
+				const routeMatches = path.match(/Route\(([^)]+)\)/g);
+				if (!routeMatches) return true;
+				const lastRoute = routeMatches[routeMatches.length - 1];
+				return lastRoute === activeRouteTag;
+			});
 		}
 
-		// Fall back to UIAutomator for Android ADB devices only.
-		// UIAutomator is not available for iOS simulators or Metro-only devices.
-		if (!deviceId.startsWith("metro-") && !isIosSimulatorId(deviceId)) {
-			return getUiAutomatorTree(deviceId);
+		// Note: getBoundingClientRect (Fabric) already returns screen-absolute
+		// coordinates in logical points. No normalization/scaling is needed —
+		// viewportWidth/Height only represent the content extent, not a
+		// different coordinate space.
+
+		if (isIosSimulatorId(deviceId)) {
+			// iOS: get accessibility tree via xcrun for accurate bounding boxes
+			const accessibilityElements = await this.getIosAccessibilityTree(deviceId);
+			if (accessibilityElements.length > 0 && cdpElements.length > 0) {
+				return mergeElements(accessibilityElements, cdpElements);
+			}
+			// Fall back to whichever source has data
+			return accessibilityElements.length > 0 ? accessibilityElements : cdpElements;
 		}
 
-		return [];
+		// Android ADB devices: merge fiber tree with UIAutomator
+		if (!deviceId.startsWith("metro-")) {
+			const uiAutomatorElements = await getUiAutomatorTree(deviceId);
+			if (uiAutomatorElements.length > 0 && cdpElements.length > 0) {
+				return mergeElements(uiAutomatorElements, cdpElements);
+			}
+			// Fall back to whichever source has data
+			return uiAutomatorElements.length > 0 ? uiAutomatorElements : cdpElements;
+		}
+
+		// Metro-only: return CDP elements as-is
+		return cdpElements;
 	}
 
 	async inspectElement(deviceId: string, x: number, y: number): Promise<MobileElement | null> {
@@ -897,13 +1036,19 @@ export class ReactNativeBridge implements IPlatformBridge {
 	// Private: CDP element tree retrieval
 	// -----------------------------------------------------------------------
 
-	private async getElementTreeViaCdp(): Promise<MobileElement[]> {
+	private async getElementTreeViaCdp(): Promise<{
+		elements: MobileElement[];
+		viewportWidth: number;
+		viewportHeight: number;
+		activeRoute: string | null;
+	}> {
+		const empty = { elements: [], viewportWidth: 0, viewportHeight: 0, activeRoute: null };
 		let ws: WebSocket | null = null;
 
 		try {
 			const targets = await getCdpTargets();
 			const target = pickCdpTarget(targets);
-			if (!target?.webSocketDebuggerUrl) return [];
+			if (!target?.webSocketDebuggerUrl) return empty;
 
 			ws = await connectWebSocket(target.webSocketDebuggerUrl);
 
@@ -923,23 +1068,35 @@ export class ReactNativeBridge implements IPlatformBridge {
 			);
 
 			if (evalResult.error) {
-				return [];
+				return empty;
 			}
 
 			const resultValue = evalResult.result?.result?.value;
 			if (typeof resultValue !== "string") {
-				return [];
+				return empty;
 			}
 
-			const parsed = JSON.parse(resultValue) as { error: string } | { elements: RawFiberElement[] };
+			const parsed = JSON.parse(resultValue) as
+				| { error: string }
+				| {
+						elements: RawFiberElement[];
+						viewportWidth?: number;
+						viewportHeight?: number;
+						activeRoute?: string | null;
+				  };
 
 			if ("error" in parsed) {
-				return [];
+				return { elements: [], viewportWidth: 0, viewportHeight: 0, activeRoute: null };
 			}
 
-			return parsed.elements.map((el) => toMobileElement(el));
+			return {
+				elements: parsed.elements.map((el) => toMobileElement(el)),
+				viewportWidth: parsed.viewportWidth ?? 0,
+				viewportHeight: parsed.viewportHeight ?? 0,
+				activeRoute: parsed.activeRoute ?? null,
+			};
 		} catch {
-			return [];
+			return empty;
 		} finally {
 			if (ws) {
 				try {
@@ -949,6 +1106,51 @@ export class ReactNativeBridge implements IPlatformBridge {
 				}
 			}
 		}
+	}
+
+	/**
+	 * Get iOS accessibility tree via `xcrun simctl ui` for accurate bounding boxes.
+	 */
+	private async getIosAccessibilityTree(deviceId: string): Promise<MobileElement[]> {
+		// Strategy 1: Try classic xcrun simctl ui accessibility (works on older Xcode)
+		try {
+			const { stdout } = await execFile("xcrun", ["simctl", "ui", deviceId, "accessibility"], {
+				timeout: ADB_TIMEOUT_MS,
+				maxBuffer: 25 * 1024 * 1024,
+			});
+
+			if (stdout && stdout.trim().length > 0) {
+				const nodes = parseAccessibilityOutput(stdout);
+				if (nodes.length > 0) {
+					return accessibilityNodesToElements(nodes, "react-native");
+				}
+			}
+		} catch {
+			// Command not supported on this Xcode version, try next strategy
+		}
+
+		// Strategy 2: Try xcrun simctl accessibility_audit (Xcode 15+)
+		try {
+			const { stdout } = await execFile(
+				"xcrun",
+				["simctl", "accessibility_audit", deviceId, "--json"],
+				{
+					timeout: ADB_TIMEOUT_MS,
+					maxBuffer: 25 * 1024 * 1024,
+				},
+			);
+
+			if (stdout && stdout.trim().length > 0) {
+				const nodes = parseAccessibilityOutput(stdout);
+				if (nodes.length > 0) {
+					return accessibilityNodesToElements(nodes, "react-native");
+				}
+			}
+		} catch {
+			// Not available
+		}
+
+		return [];
 	}
 }
 

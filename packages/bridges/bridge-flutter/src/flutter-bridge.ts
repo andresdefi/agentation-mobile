@@ -250,9 +250,13 @@ function extractBoundingBox(node: VmWidgetNode): {
 	width: number;
 	height: number;
 } {
-	const defaultBox = { x: 0, y: 0, width: 0, height: 0 };
+	let x = 0;
+	let y = 0;
+	let width = 0;
+	let height = 0;
+
 	const renderProps = node.renderObject?.properties;
-	if (!renderProps) return defaultBox;
+	if (!renderProps) return { x, y, width, height };
 
 	for (const prop of renderProps) {
 		if (!prop.description) continue;
@@ -261,12 +265,9 @@ function extractBoundingBox(node: VmWidgetNode): {
 		if (prop.name === "size" || prop.name === "paintBounds") {
 			const sizeMatch = prop.description.match(/Size\((\d+(?:\.\d+)?),\s*(\d+(?:\.\d+)?)\)/);
 			if (sizeMatch) {
-				return {
-					x: 0,
-					y: 0,
-					width: Math.round(Number(sizeMatch[1])),
-					height: Math.round(Number(sizeMatch[2])),
-				};
+				width = Math.round(Number(sizeMatch[1]));
+				height = Math.round(Number(sizeMatch[2]));
+				continue;
 			}
 
 			// Match "Rect.fromLTRB(l, t, r, b)" pattern
@@ -278,12 +279,11 @@ function extractBoundingBox(node: VmWidgetNode): {
 				const t = Number(rectMatch[2]);
 				const r = Number(rectMatch[3]);
 				const b = Number(rectMatch[4]);
-				return {
-					x: Math.round(l),
-					y: Math.round(t),
-					width: Math.round(r - l),
-					height: Math.round(b - t),
-				};
+				x = Math.round(l);
+				y = Math.round(t);
+				width = Math.round(r - l);
+				height = Math.round(b - t);
+				continue;
 			}
 		}
 
@@ -293,13 +293,13 @@ function extractBoundingBox(node: VmWidgetNode): {
 				/Offset\((-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)\)/,
 			);
 			if (offsetMatch) {
-				defaultBox.x = Math.round(Number(offsetMatch[1]));
-				defaultBox.y = Math.round(Number(offsetMatch[2]));
+				x = Math.round(Number(offsetMatch[1]));
+				y = Math.round(Number(offsetMatch[2]));
 			}
 		}
 	}
 
-	return defaultBox;
+	return { x, y, width, height };
 }
 
 /**
@@ -488,6 +488,44 @@ function detectFlutterAnimations(
 			duration,
 		},
 	];
+}
+
+/**
+ * Collect all render object nodes into a map keyed by valueId.
+ */
+function collectRenderNodes(node: VmWidgetNode, map: Map<string, VmWidgetNode>): void {
+	if (node.valueId) {
+		map.set(node.valueId, node);
+	}
+	if (node.children) {
+		for (const child of node.children) {
+			collectRenderNodes(child, map);
+		}
+	}
+}
+
+/**
+ * Walk the widget tree and enrich nodes that are missing renderObject data
+ * by looking up their valueId in the render object tree map.
+ */
+function enrichWidgetTreeWithRenderData(
+	node: VmWidgetNode,
+	renderMap: Map<string, VmWidgetNode>,
+): void {
+	if (node.valueId && !node.renderObject) {
+		const renderNode = renderMap.get(node.valueId);
+		if (renderNode?.properties) {
+			node.renderObject = {
+				description: renderNode.description,
+				properties: renderNode.properties,
+			};
+		}
+	}
+	if (node.children) {
+		for (const child of node.children) {
+			enrichWidgetTreeWithRenderData(child, renderMap);
+		}
+	}
 }
 
 /**
@@ -709,6 +747,28 @@ export class FlutterBridge implements IPlatformBridge {
 
 			const rootNode = treeResp.result as unknown as VmWidgetNode;
 			if (!rootNode) return [];
+
+			// Optionally enrich with render object tree for better layout data
+			try {
+				const renderResp = await callVmServiceMethod(
+					ws,
+					"ext.flutter.inspector.getRenderObjectTree",
+					{
+						isolateId: mainIsolate.id,
+						groupName: "agentation-inspector",
+					},
+				);
+				if (!renderResp.error && renderResp.result) {
+					const renderRoot = renderResp.result as unknown as VmWidgetNode;
+					if (renderRoot) {
+						const renderMap = new Map<string, VmWidgetNode>();
+						collectRenderNodes(renderRoot, renderMap);
+						enrichWidgetTreeWithRenderData(rootNode, renderMap);
+					}
+				}
+			} catch {
+				// Non-fatal: proceed with widget tree as-is
+			}
 
 			const counter = { value: 0 };
 			return flattenWidgetTree(rootNode, "", counter);

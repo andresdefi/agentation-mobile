@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { IPlatformBridge } from "@agentation-mobile/bridge-core";
 import { createServer } from "@agentation-mobile/server";
 import { Command } from "commander";
@@ -26,10 +27,16 @@ program
 				url,
 				secret,
 			})) ?? [];
+		// Resolve web-ui dist directory relative to this package
+		const cliDir = dirname(fileURLToPath(import.meta.url));
+		const webUiDir = join(cliDir, "..", "..", "web-ui", "dist");
+		const staticDir = existsSync(webUiDir) ? webUiDir : undefined;
+
 		const server = createServer({
 			port: Number(options.port),
 			bridges,
 			webhooks,
+			staticDir,
 		});
 		await server.start();
 		console.log(`Bridges loaded: ${bridges.map((b) => b.platform).join(", ") || "none"}`);
@@ -239,6 +246,52 @@ program
 		}
 		console.error("No bridge supports device pairing. Is ADB installed?");
 		process.exit(1);
+	});
+
+program
+	.command("inject")
+	.description("Inject introspection dylib into an iOS simulator app for zero-config UI inspection")
+	.argument("[bundleId]", "Bundle ID of the app (auto-detects frontmost app if omitted)")
+	.option("-d, --device <id>", "Simulator device ID (defaults to first available)")
+	.action(async (bundleId: string | undefined, options: { device?: string }) => {
+		const { IosBridge } = await import("@agentation-mobile/bridge-ios");
+		const ios = new IosBridge();
+		if (!(await ios.isAvailable())) {
+			console.error("iOS simulator tools not available. Is Xcode installed?");
+			process.exit(1);
+		}
+
+		const devices = await ios.listDevices();
+		if (devices.length === 0) {
+			console.error("No iOS simulators found. Boot a simulator first.");
+			process.exit(1);
+		}
+
+		const deviceId = options.device ?? devices[0].id;
+		const device = devices.find((d) => d.id === deviceId);
+		if (!device) {
+			console.error(`Device not found: ${deviceId}`);
+			process.exit(1);
+		}
+
+		// Auto-detect frontmost app if no bundle ID provided
+		let targetBundleId = bundleId;
+		if (!targetBundleId) {
+			console.log(`Detecting frontmost app on ${device.name}...`);
+			targetBundleId = await ios.getFrontmostApp(deviceId);
+			if (!targetBundleId) {
+				console.error(
+					"Could not detect frontmost app. Please provide a bundle ID: agentation-mobile inject <bundleId>",
+				);
+				process.exit(1);
+			}
+			console.log(`Found: ${targetBundleId}`);
+		}
+
+		console.log(`Injecting into ${targetBundleId} on ${device.name}...`);
+		const result = await ios.injectIntoApp(deviceId, targetBundleId);
+		console.log(result.message);
+		process.exit(result.success ? 0 : 1);
 	});
 
 program

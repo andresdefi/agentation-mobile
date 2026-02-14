@@ -17,6 +17,10 @@ interface DeviceTabsProps {
 	devicesLoading: boolean;
 }
 
+function deviceKey(device: DeviceInfo): string {
+	return `${device.id}:::${device.platform}`;
+}
+
 function platformIcon(platform: string): string {
 	switch (platform) {
 		case "react-native":
@@ -43,8 +47,10 @@ export function DeviceTabs({
 }: DeviceTabsProps) {
 	const [showAddMenu, setShowAddMenu] = useState(false);
 
-	// Devices not already in a tab
-	const unusedDevices = availableDevices.filter((d) => !tabs.some((tab) => tab.device.id === d.id));
+	// Devices not already in a tab (compare by id + platform since same device can have multiple bridges)
+	const unusedDevices = availableDevices.filter(
+		(d) => !tabs.some((tab) => tab.device.id === d.id && tab.device.platform === d.platform),
+	);
 
 	if (tabs.length === 0) {
 		return (
@@ -54,7 +60,8 @@ export function DeviceTabs({
 					<select
 						value=""
 						onChange={(e) => {
-							const device = availableDevices.find((d) => d.id === e.target.value);
+							const [id, platform] = e.target.value.split(":::");
+							const device = availableDevices.find((d) => d.id === id && d.platform === platform);
 							if (device) onAddDevice(device);
 						}}
 						disabled={devicesLoading || availableDevices.length === 0}
@@ -72,7 +79,7 @@ export function DeviceTabs({
 							<option value="">Select a device</option>
 						)}
 						{availableDevices.map((device) => (
-							<option key={device.id} value={device.id}>
+							<option key={deviceKey(device)} value={deviceKey(device)}>
 								{device.name} ({platformIcon(device.platform)})
 								{device.isEmulator ? " [Emulator]" : ""}
 							</option>
@@ -105,7 +112,7 @@ export function DeviceTabs({
 			<div className="flex flex-wrap items-center gap-1">
 				{tabs.map((tab, i) => (
 					<div
-						key={tab.device.id}
+						key={deviceKey(tab.device)}
 						className={cn(
 							"group flex items-center gap-1 rounded-lg border px-2 py-1 text-xs transition-colors",
 							i === activeTabIndex
@@ -171,7 +178,7 @@ export function DeviceTabs({
 							{unusedDevices.map((device) => (
 								<button
 									type="button"
-									key={device.id}
+									key={deviceKey(device)}
 									onClick={() => {
 										onAddDevice(device);
 										setShowAddMenu(false);

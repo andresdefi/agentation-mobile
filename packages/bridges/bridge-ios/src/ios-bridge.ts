@@ -1,10 +1,14 @@
 import { execFile as execFileCb } from "node:child_process";
+import { existsSync } from "node:fs";
 import http from "node:http";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import {
 	type DeviceInfo,
 	type IPlatformBridge,
 	lookupIosScreenSize,
+	mergeElements,
 } from "@agentation-mobile/bridge-core";
 import type { MobileElement } from "@agentation-mobile/core";
 
@@ -12,6 +16,9 @@ const execFile = promisify(execFileCb);
 
 /** Maximum time (ms) to wait for any single simctl command. */
 const SIMCTL_TIMEOUT = 15_000;
+
+/** Port used by the in-app introspection server (dylib or SDK). */
+const INTROSPECTION_PORT = 4748;
 
 /** Maximum buffer size (bytes) for screenshot output (~25 MB). */
 const SIMCTL_MAX_BUFFER = 25 * 1024 * 1024;
@@ -439,25 +446,54 @@ export class IosBridge implements IPlatformBridge {
 	 * Get the raw accessibility element tree (without SDK enrichment).
 	 */
 	private async getAccessibilityTree(deviceId: string): Promise<MobileElement[]> {
+		// Strategy 1: Try classic xcrun simctl ui accessibility (works on older Xcode)
 		try {
 			const { stdout } = await execFile("xcrun", ["simctl", "ui", deviceId, "accessibility"], {
 				timeout: SIMCTL_TIMEOUT,
 				maxBuffer: SIMCTL_MAX_BUFFER,
 			});
 
-			if (!stdout || stdout.trim().length === 0) {
-				return this.buildFallbackRoot(deviceId);
+			if (stdout && stdout.trim().length > 0) {
+				const elements = this.parseAccessibilityTree(stdout);
+				if (elements.length > 0) return elements;
 			}
-
-			const elements = this.parseAccessibilityTree(stdout);
-			if (elements.length === 0) {
-				return this.buildFallbackRoot(deviceId);
-			}
-
-			return elements;
 		} catch {
-			return this.buildFallbackRoot(deviceId);
+			// Command not supported on this Xcode version, try next strategy
 		}
+
+		// Strategy 2: Try xcrun simctl accessibility_audit (Xcode 15+)
+		try {
+			const { stdout } = await execFile(
+				"xcrun",
+				["simctl", "accessibility_audit", deviceId, "--json"],
+				{
+					timeout: SIMCTL_TIMEOUT,
+					maxBuffer: SIMCTL_MAX_BUFFER,
+				},
+			);
+
+			if (stdout && stdout.trim().length > 0) {
+				const parsed = JSON.parse(stdout);
+				if (Array.isArray(parsed) && parsed.length > 0) {
+					const elements = this.parseAccessibilityTree(stdout);
+					if (elements.length > 0) return elements;
+				}
+			}
+		} catch {
+			// Not available, try next strategy
+		}
+
+		// Strategy 3: Use SDK elements directly if available
+		try {
+			const sdkElements = await this.querySdkElements(deviceId);
+			if (sdkElements && sdkElements.length > 0) {
+				return sdkElements;
+			}
+		} catch {
+			// SDK not available
+		}
+
+		return this.buildFallbackRoot(deviceId);
 	}
 
 	/**
@@ -465,14 +501,33 @@ export class IosBridge implements IPlatformBridge {
 	 * empty or unavailable. This ensures callers always get at least one
 	 * element representing the full screen.
 	 */
-	private buildFallbackRoot(deviceId: string): MobileElement[] {
+	private async buildFallbackRoot(deviceId: string): Promise<MobileElement[]> {
+		// Try to resolve device name for accurate screen size
+		let screenSize = { width: 393, height: 852 };
+		try {
+			const { stdout } = await execFile("xcrun", ["simctl", "list", "devices", "-j"], {
+				timeout: SIMCTL_TIMEOUT,
+			});
+			const parsed: SimctlDeviceListOutput = JSON.parse(stdout);
+			for (const deviceList of Object.values(parsed.devices)) {
+				for (const device of deviceList) {
+					if (device.udid === deviceId) {
+						screenSize = lookupIosScreenSize(device.name);
+						break;
+					}
+				}
+			}
+		} catch {
+			// Use default screen size
+		}
+
 		return [
 			{
 				id: `ios:root:${deviceId}`,
 				platform: "ios-native",
 				componentPath: "Application",
 				componentName: "Application",
-				boundingBox: { x: 0, y: 0, width: 0, height: 0 },
+				boundingBox: { x: 0, y: 0, width: screenSize.width, height: screenSize.height },
 				accessibility: {
 					role: "application",
 				},
@@ -772,60 +827,7 @@ export class IosBridge implements IPlatformBridge {
 		accessibilityElements: MobileElement[],
 		sdkElements: MobileElement[],
 	): MobileElement[] {
-		if (sdkElements.length === 0) return accessibilityElements;
-
-		const enriched = accessibilityElements.map((accEl) => {
-			const match = this.findBestSdkMatch(accEl, sdkElements);
-			if (!match) return accEl;
-
-			return {
-				...accEl,
-				sourceLocation: match.sourceLocation ?? accEl.sourceLocation,
-				componentFile: match.componentFile ?? accEl.componentFile,
-				componentName: match.componentName || accEl.componentName,
-				animations: match.animations ?? accEl.animations,
-			};
-		});
-
-		return enriched;
-	}
-
-	/**
-	 * Find the SDK element that best matches by bounding box overlap.
-	 */
-	private findBestSdkMatch(
-		target: MobileElement,
-		sdkElements: MobileElement[],
-	): MobileElement | null {
-		let bestMatch: MobileElement | null = null;
-		let bestOverlap = 0;
-
-		const tb = target.boundingBox;
-
-		for (const sdk of sdkElements) {
-			const sb = sdk.boundingBox;
-
-			const overlapX = Math.max(
-				0,
-				Math.min(tb.x + tb.width, sb.x + sb.width) - Math.max(tb.x, sb.x),
-			);
-			const overlapY = Math.max(
-				0,
-				Math.min(tb.y + tb.height, sb.y + sb.height) - Math.max(tb.y, sb.y),
-			);
-			const overlapArea = overlapX * overlapY;
-
-			const targetArea = tb.width * tb.height;
-			const sdkArea = sb.width * sb.height;
-			const minArea = Math.min(targetArea, sdkArea);
-
-			if (minArea > 0 && overlapArea / minArea > 0.5 && overlapArea > bestOverlap) {
-				bestOverlap = overlapArea;
-				bestMatch = sdk;
-			}
-		}
-
-		return bestMatch;
+		return mergeElements(accessibilityElements, sdkElements);
 	}
 
 	/**
@@ -850,5 +852,107 @@ export class IosBridge implements IPlatformBridge {
 				resolve(null);
 			});
 		});
+	}
+
+	/**
+	 * Check if the introspection server (dylib or SDK) is running.
+	 */
+	async isIntrospectionServerReady(): Promise<boolean> {
+		const body = await this.httpGet(`http://127.0.0.1:${INTROSPECTION_PORT}/agentation/health`);
+		return body !== null;
+	}
+
+	/**
+	 * Get the path to the pre-built introspection dylib.
+	 * Returns null if the dylib hasn't been built.
+	 */
+	getDylibPath(): string | null {
+		// Resolve relative to this file: ../dylib/AgentationIntrospector.dylib
+		// Works in both ESM (import.meta.url) and CJS (__dirname)
+		let thisDir: string;
+		try {
+			thisDir = dirname(fileURLToPath(import.meta.url));
+		} catch {
+			thisDir = __dirname;
+		}
+		const dylibPath = join(thisDir, "..", "dylib", "AgentationIntrospector.dylib");
+		return existsSync(dylibPath) ? dylibPath : null;
+	}
+
+	/**
+	 * Launch (or relaunch) a simulator app with the introspection dylib injected.
+	 * Uses SIMCTL_CHILD_DYLD_INSERT_LIBRARIES to load the dylib into the app process.
+	 */
+	async injectIntoApp(
+		deviceId: string,
+		bundleId: string,
+	): Promise<{ success: boolean; message: string }> {
+		const dylibPath = this.getDylibPath();
+		if (!dylibPath) {
+			return {
+				success: false,
+				message:
+					"Introspection dylib not found. Run the build script: packages/bridges/bridge-ios/dylib/build.sh",
+			};
+		}
+
+		// Terminate any running instance
+		try {
+			await execFile("xcrun", ["simctl", "terminate", deviceId, bundleId], {
+				timeout: SIMCTL_TIMEOUT,
+			});
+			// Brief wait for process to fully exit
+			await new Promise((r) => setTimeout(r, 500));
+		} catch {
+			// App may not be running — that's fine
+		}
+
+		// Launch with dylib injection
+		try {
+			const env = { ...process.env, SIMCTL_CHILD_DYLD_INSERT_LIBRARIES: dylibPath };
+			await execFile("xcrun", ["simctl", "launch", deviceId, bundleId], {
+				timeout: SIMCTL_TIMEOUT,
+				env,
+			});
+		} catch (err) {
+			return {
+				success: false,
+				message: `Failed to launch ${bundleId}: ${err instanceof Error ? err.message : String(err)}`,
+			};
+		}
+
+		// Wait for the introspection server to come up (max 5 seconds)
+		for (let i = 0; i < 10; i++) {
+			await new Promise((r) => setTimeout(r, 500));
+			if (await this.isIntrospectionServerReady()) {
+				return {
+					success: true,
+					message: `Injected into ${bundleId} — introspection server active on port ${INTROSPECTION_PORT}`,
+				};
+			}
+		}
+
+		return {
+			success: false,
+			message: `Launched ${bundleId} with injection but introspection server did not start within 5s`,
+		};
+	}
+
+	/**
+	 * Get the bundle ID of the frontmost (foreground) app on the simulator.
+	 */
+	async getFrontmostApp(deviceId: string): Promise<string | null> {
+		try {
+			const { stdout } = await execFile(
+				"xcrun",
+				["simctl", "spawn", deviceId, "launchctl", "list"],
+				{ timeout: SIMCTL_TIMEOUT },
+			);
+			// Look for UIKitApplication entries
+			const match = stdout.match(/UIKitApplication:([^\[]+)\[/);
+			return match ? match[1] : null;
+		} catch {
+			return null;
+		}
 	}
 }

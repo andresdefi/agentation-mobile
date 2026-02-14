@@ -18,6 +18,7 @@ export interface CreateAnnotationInput {
 	platform: string;
 	screenWidth: number;
 	screenHeight: number;
+	screenId?: string | null;
 	screenshotId?: string;
 	comment: string;
 	intent: MobileAnnotation["intent"];
@@ -123,6 +124,7 @@ export class Store {
 			platform: input.platform,
 			screenWidth: input.screenWidth,
 			screenHeight: input.screenHeight,
+			screenId: input.screenId ?? null,
 			screenshotId: input.screenshotId,
 			comment: input.comment,
 			intent: input.intent,

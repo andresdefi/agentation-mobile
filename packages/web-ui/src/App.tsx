@@ -66,21 +66,21 @@ export function App() {
 		updateStatus,
 	} = useAnnotations(activeSessionId);
 
-	// Screen mirror
+	// Element tree (pass platform for correct bridge selection)
+	const {
+		elements,
+		screenId,
+		loading: elementsLoading,
+		error: elementsError,
+		refresh: refreshElements,
+	} = useElementTree(selectedDevice?.id ?? null, selectedDevice?.platform);
+
+	// Screen mirror (pass platform for correct bridge selection)
 	const {
 		frameUrl,
 		connected,
 		error: mirrorError,
-		sendInput,
-	} = useScreenMirror(selectedDevice?.id ?? null);
-
-	// Element tree
-	const {
-		elements,
-		loading: elementsLoading,
-		error: elementsError,
-		refresh: refreshElements,
-	} = useElementTree(selectedDevice?.id ?? null);
+	} = useScreenMirror(selectedDevice?.id ?? null, selectedDevice?.platform, refreshElements);
 
 	// OCR
 	const { regions: textRegions, loading: ocrLoading, runOcr, clear: clearOcr } = useOcr();
@@ -135,6 +135,52 @@ export function App() {
 			return true;
 		});
 	}, [annotations, filters]);
+
+	// Annotations visible on the current screen (filter by screenId for pin display)
+	// When we know the current screen, only show annotations that match it
+	const visibleAnnotations = useMemo(() => {
+		if (!screenId) return filteredAnnotations;
+		return filteredAnnotations.filter((a) => a.screenId === screenId);
+	}, [filteredAnnotations, screenId]);
+
+	// Re-locate annotation pins based on current element positions (scroll-aware)
+	const relocatedAnnotations = useMemo(() => {
+		if (!selectedDevice || elements.length === 0) return visibleAnnotations;
+		const screenW = selectedDevice.screenWidth || 1;
+		const screenH = selectedDevice.screenHeight || 1;
+
+		return visibleAnnotations.map((annotation) => {
+			const el = annotation.element;
+			if (!el) return annotation;
+
+			// Try to find matching element in current tree by componentPath, then textContent
+			const match = elements.find((current) => {
+				if (el.componentPath && current.componentPath === el.componentPath) return true;
+				if (
+					el.textContent &&
+					current.textContent === el.textContent &&
+					current.componentName === el.componentName
+				)
+					return true;
+				return false;
+			});
+
+			if (!match?.boundingBox) return annotation;
+			const { x, y, width, height } = match.boundingBox;
+			if (width <= 0 || height <= 0) return annotation;
+
+			// Compute new percentage position from element center
+			const newX = ((x + width / 2) / screenW) * 100;
+			const newY = ((y + height / 2) / screenH) * 100;
+
+			// Only update if position actually changed
+			if (Math.abs(newX - annotation.x) < 0.5 && Math.abs(newY - annotation.y) < 0.5) {
+				return annotation;
+			}
+
+			return { ...annotation, x: newX, y: newY };
+		});
+	}, [visibleAnnotations, elements, selectedDevice]);
 
 	// Keep selectedAnnotation synced with live data
 	const liveSelectedAnnotation = useMemo(
@@ -244,18 +290,35 @@ export function App() {
 		}
 	}, [annotations, selectedDevice]);
 
+	// Build the inspect URL with platform query param
+	const inspectUrl = useCallback(
+		(pixelX: number, pixelY: number) => {
+			if (!selectedDevice) return "";
+			let url = `/api/devices/${encodeURIComponent(selectedDevice.id)}/inspect?x=${pixelX}&y=${pixelY}`;
+			if (selectedDevice.platform) {
+				url += `&platform=${encodeURIComponent(selectedDevice.platform)}`;
+			}
+			return url;
+		},
+		[selectedDevice],
+	);
+
 	// Handle adding a device (creates a new tab)
 	const handleAddDevice = useCallback(
 		async (device: DeviceInfo) => {
-			// Check if this device already has a tab
-			const existingIdx = tabs.findIndex((t) => t.device.id === device.id);
+			// Check if this device+platform already has a tab
+			const existingIdx = tabs.findIndex(
+				(t) => t.device.id === device.id && t.device.platform === device.platform,
+			);
 			if (existingIdx >= 0) {
 				setActiveTabIndex(existingIdx);
 				return;
 			}
 
 			// Find or create session
-			const existingSession = sessions.find((s) => s.deviceId === device.id);
+			const existingSession = sessions.find(
+				(s) => s.deviceId === device.id && s.platform === device.platform,
+			);
 			let sessionId: string;
 			if (existingSession) {
 				sessionId = existingSession.id;
@@ -309,39 +372,13 @@ export function App() {
 			const pixelY = Math.round((y / 100) * selectedDevice.screenHeight);
 
 			try {
-				const element = await apiFetch<MobileElement>(
-					`/api/devices/${encodeURIComponent(selectedDevice.id)}/inspect?x=${pixelX}&y=${pixelY}`,
-				);
+				const element = await apiFetch<MobileElement>(inspectUrl(pixelX, pixelY));
 				setClickCoords((prev) => (prev ? { ...prev, element, inspecting: false } : null));
 			} catch {
 				setClickCoords((prev) => (prev ? { ...prev, element: null, inspecting: false } : null));
 			}
 		},
-		[activeSessionId, selectedDevice],
-	);
-
-	// Remote mode: tap (convert % coords to pixel coords and send via WebSocket)
-	const handleRemoteTap = useCallback(
-		(xPct: number, yPct: number) => {
-			if (!selectedDevice) return;
-			const x = Math.round((xPct / 100) * selectedDevice.screenWidth);
-			const y = Math.round((yPct / 100) * selectedDevice.screenHeight);
-			sendInput({ type: "tap", x, y });
-		},
-		[selectedDevice, sendInput],
-	);
-
-	// Remote mode: swipe
-	const handleRemoteSwipe = useCallback(
-		(fromXPct: number, fromYPct: number, toXPct: number, toYPct: number) => {
-			if (!selectedDevice) return;
-			const fromX = Math.round((fromXPct / 100) * selectedDevice.screenWidth);
-			const fromY = Math.round((fromYPct / 100) * selectedDevice.screenHeight);
-			const toX = Math.round((toXPct / 100) * selectedDevice.screenWidth);
-			const toY = Math.round((toYPct / 100) * selectedDevice.screenHeight);
-			sendInput({ type: "swipe", fromX, fromY, toX, toY, durationMs: 300 });
-		},
-		[selectedDevice, sendInput],
+		[activeSessionId, selectedDevice, inspectUrl],
 	);
 
 	// Recording: start
@@ -390,15 +427,13 @@ export function App() {
 			const pixelY = Math.round((centerY / 100) * selectedDevice.screenHeight);
 
 			try {
-				const element = await apiFetch<MobileElement>(
-					`/api/devices/${encodeURIComponent(selectedDevice.id)}/inspect?x=${pixelX}&y=${pixelY}`,
-				);
+				const element = await apiFetch<MobileElement>(inspectUrl(pixelX, pixelY));
 				setClickCoords((prev) => (prev ? { ...prev, element, inspecting: false } : null));
 			} catch {
 				setClickCoords((prev) => (prev ? { ...prev, element: null, inspecting: false } : null));
 			}
 		},
-		[activeSessionId, selectedDevice],
+		[activeSessionId, selectedDevice, inspectUrl],
 	);
 
 	// Handle area selection (drag mode)
@@ -421,15 +456,13 @@ export function App() {
 			const pixelY = Math.round((centerY / 100) * selectedDevice.screenHeight);
 
 			try {
-				const element = await apiFetch<MobileElement>(
-					`/api/devices/${encodeURIComponent(selectedDevice.id)}/inspect?x=${pixelX}&y=${pixelY}`,
-				);
+				const element = await apiFetch<MobileElement>(inspectUrl(pixelX, pixelY));
 				setClickCoords((prev) => (prev ? { ...prev, element, inspecting: false } : null));
 			} catch {
 				setClickCoords((prev) => (prev ? { ...prev, element: null, inspecting: false } : null));
 			}
 		},
-		[activeSessionId, selectedDevice],
+		[activeSessionId, selectedDevice, inspectUrl],
 	);
 
 	// Handle annotation form submit
@@ -447,6 +480,7 @@ export function App() {
 					platform: selectedDevice.platform,
 					screenWidth: selectedDevice.screenWidth,
 					screenHeight: selectedDevice.screenHeight,
+					screenId: screenId ?? undefined,
 					comment,
 					intent: "fix",
 					severity: "important",
@@ -459,7 +493,7 @@ export function App() {
 				setSubmittingAnnotation(false);
 			}
 		},
-		[clickCoords, activeSessionId, selectedDevice, createAnnotation],
+		[clickCoords, activeSessionId, selectedDevice, screenId, createAnnotation],
 	);
 
 	const handleToggleAnimations = useCallback(async () => {
@@ -892,7 +926,7 @@ export function App() {
 					frameUrl={frameUrl}
 					connected={connected}
 					error={mirrorError}
-					annotations={filteredAnnotations}
+					annotations={relocatedAnnotations}
 					selectedAnnotationId={liveSelectedAnnotation?.id ?? null}
 					recentlyResolved={recentlyResolved}
 					interactionMode={interactionMode}
@@ -907,8 +941,6 @@ export function App() {
 					onAreaSelect={handleAreaSelect}
 					onTextSelect={handleTextSelect}
 					onSelectAnnotation={handleSelectAnnotation}
-					onRemoteTap={handleRemoteTap}
-					onRemoteSwipe={handleRemoteSwipe}
 					overrideFrameUrl={overrideFrameUrl}
 				/>
 

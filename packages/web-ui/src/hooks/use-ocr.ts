@@ -19,6 +19,15 @@ interface UseOcrResult {
 	clear: () => void;
 }
 
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+	return Promise.race([
+		promise,
+		new Promise<never>((_, reject) =>
+			setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms),
+		),
+	]);
+}
+
 export function useOcr(): UseOcrResult {
 	const [regions, setRegions] = useState<TextRegion[]>([]);
 	const [loading, setLoading] = useState(false);
@@ -31,12 +40,20 @@ export function useOcr(): UseOcrResult {
 		setRegions([]);
 
 		try {
-			// Create worker if not already created
+			// Create worker if not already created (with 15s timeout for language data download)
 			if (!workerRef.current) {
-				workerRef.current = await createWorker("eng");
+				workerRef.current = await withTimeout(
+					createWorker("eng"),
+					15000,
+					"OCR worker initialization",
+				);
 			}
 
-			const result = await workerRef.current.recognize(imageUrl);
+			const result = await withTimeout(
+				workerRef.current.recognize(imageUrl),
+				10000,
+				"OCR recognition",
+			);
 			const { words } = result.data;
 
 			if (!words || words.length === 0) {
@@ -92,6 +109,11 @@ export function useOcr(): UseOcrResult {
 
 			setRegions(textRegions);
 		} catch (err) {
+			// If worker timed out, discard it so next attempt creates a fresh one
+			if (workerRef.current && err instanceof Error && err.message.includes("timed out")) {
+				workerRef.current.terminate().catch(() => {});
+				workerRef.current = null;
+			}
 			setError(err instanceof Error ? err.message : "OCR failed");
 		} finally {
 			setLoading(false);

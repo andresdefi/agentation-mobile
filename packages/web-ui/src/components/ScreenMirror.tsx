@@ -4,7 +4,7 @@ import type { TextRegion } from "../hooks/use-ocr";
 import type { MobileAnnotation, MobileElement, SelectedArea } from "../types";
 import { cn, getElementDisplayName, hitTestElement } from "../utils";
 
-export type InteractionMode = "point" | "area" | "text" | "remote";
+export type InteractionMode = "point" | "area" | "text";
 
 interface ScreenMirrorProps {
 	frameUrl: string | null;
@@ -26,8 +26,6 @@ interface ScreenMirrorProps {
 	onAreaSelect: (area: SelectedArea) => void;
 	onTextSelect: (region: TextRegion) => void;
 	onSelectAnnotation: (annotation: MobileAnnotation) => void;
-	onRemoteTap?: (xPct: number, yPct: number) => void;
-	onRemoteSwipe?: (fromXPct: number, fromYPct: number, toXPct: number, toYPct: number) => void;
 }
 
 function pinColor(status: string): string {
@@ -144,8 +142,6 @@ export function ScreenMirror({
 	onAreaSelect,
 	onTextSelect,
 	onSelectAnnotation,
-	onRemoteTap,
-	onRemoteSwipe,
 }: ScreenMirrorProps) {
 	const imageRef = useRef<HTMLImageElement>(null);
 	const containerRef = useRef<HTMLDivElement>(null);
@@ -168,9 +164,6 @@ export function ScreenMirror({
 	const [dragCurrent, setDragCurrent] = useState<{ x: number; y: number } | null>(null);
 	const isDragging = dragStart !== null && dragCurrent !== null;
 
-	// Remote mode: swipe gesture tracking
-	const [remoteSwipeStart, setRemoteSwipeStart] = useState<{ x: number; y: number } | null>(null);
-
 	const getPercentCoords = useCallback(
 		(e: React.MouseEvent<HTMLDivElement>): { x: number; y: number } | null => {
 			const img = imageRef.current;
@@ -189,7 +182,6 @@ export function ScreenMirror({
 	const handleClick = useCallback(
 		(e: React.MouseEvent<HTMLDivElement>) => {
 			if (interactionMode === "area") return;
-			if (interactionMode === "remote") return; // remote uses mouseDown/mouseUp
 			const coords = getPercentCoords(e);
 			if (coords) onClickScreen(coords.x, coords.y, e.clientX, e.clientY);
 		},
@@ -198,12 +190,6 @@ export function ScreenMirror({
 
 	const handleMouseDown = useCallback(
 		(e: React.MouseEvent<HTMLDivElement>) => {
-			if (interactionMode === "remote") {
-				e.preventDefault();
-				const coords = getPercentCoords(e);
-				if (coords) setRemoteSwipeStart(coords);
-				return;
-			}
 			if (interactionMode !== "area") return;
 			e.preventDefault();
 			const coords = getPercentCoords(e);
@@ -225,13 +211,7 @@ export function ScreenMirror({
 			}
 
 			// Hover hit-testing throttled to once per frame
-			if (
-				interactionMode !== "remote" &&
-				elements &&
-				elements.length > 0 &&
-				screenWidth &&
-				screenHeight
-			) {
+			if (elements && elements.length > 0 && screenWidth && screenHeight) {
 				const clientX = e.clientX;
 				const clientY = e.clientY;
 				if (rafRef.current) cancelAnimationFrame(rafRef.current);
@@ -247,29 +227,11 @@ export function ScreenMirror({
 				});
 			}
 		},
-		[dragStart, interactionMode, elements, screenWidth, screenHeight, getPercentCoords],
+		[dragStart, elements, screenWidth, screenHeight, getPercentCoords],
 	);
 
 	const handleMouseUp = useCallback(
 		(e: React.MouseEvent<HTMLDivElement>) => {
-			// Remote mode: tap or swipe
-			if (interactionMode === "remote" && remoteSwipeStart) {
-				const coords = getPercentCoords(e);
-				if (coords) {
-					const dx = Math.abs(coords.x - remoteSwipeStart.x);
-					const dy = Math.abs(coords.y - remoteSwipeStart.y);
-					if (dx < 2 && dy < 2) {
-						// Tap (minimal movement)
-						onRemoteTap?.(coords.x, coords.y);
-					} else {
-						// Swipe
-						onRemoteSwipe?.(remoteSwipeStart.x, remoteSwipeStart.y, coords.x, coords.y);
-					}
-				}
-				setRemoteSwipeStart(null);
-				return;
-			}
-
 			if (!dragStart || !dragCurrent) return;
 			const x = Math.min(dragStart.x, dragCurrent.x);
 			const y = Math.min(dragStart.y, dragCurrent.y);
@@ -284,16 +246,7 @@ export function ScreenMirror({
 				onAreaSelect({ x, y, width, height });
 			}
 		},
-		[
-			interactionMode,
-			remoteSwipeStart,
-			dragStart,
-			dragCurrent,
-			getPercentCoords,
-			onRemoteTap,
-			onRemoteSwipe,
-			onAreaSelect,
-		],
+		[dragStart, dragCurrent, onAreaSelect],
 	);
 
 	// Calculate drag rect for rendering
@@ -398,10 +351,7 @@ export function ScreenMirror({
 					<>
 						{/* Clickable/draggable overlay area exactly matching the image */}
 						<div
-							className={cn(
-								"absolute inset-0 z-10",
-								interactionMode === "remote" ? "cursor-pointer" : "cursor-crosshair",
-							)}
+							className={cn("absolute inset-0 z-10", "cursor-crosshair")}
 							role="button"
 							tabIndex={0}
 							onClick={handleClick}
@@ -449,13 +399,21 @@ export function ScreenMirror({
 						{/* Hover tooltip — positioned above cursor like Agentation web */}
 						{hoveredElement && mousePos && !pendingElement && (
 							<div
-								className="pointer-events-none fixed z-50 max-w-xs rounded-lg bg-neutral-900 px-3 py-1.5 text-xs text-neutral-100 shadow-lg"
+								className="pointer-events-none fixed z-50 max-w-xs rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-2 text-xs shadow-lg"
 								style={{
-									left: Math.max(8, Math.min(mousePos.x, window.innerWidth - 100)),
-									top: Math.max(8, mousePos.y - 32),
+									left: Math.max(8, Math.min(mousePos.x, window.innerWidth - 200)),
+									top: Math.max(8, mousePos.y - (hoveredElement.componentFile ? 52 : 32)),
 								}}
 							>
-								{getElementDisplayName(hoveredElement)}
+								<div className="font-medium text-neutral-100">
+									{getElementDisplayName(hoveredElement)}
+								</div>
+								{hoveredElement.componentFile && (
+									<div className="mt-0.5 truncate text-neutral-400">
+										{hoveredElement.componentFile}
+										{hoveredElement.sourceLocation ? `:${hoveredElement.sourceLocation.line}` : ""}
+									</div>
+								)}
 							</div>
 						)}
 
