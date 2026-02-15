@@ -7,13 +7,14 @@ import { type DeviceTab, DeviceTabs } from "./components/DeviceTabs";
 import { ElementTreePanel } from "./components/ElementTreePanel";
 import { ExportMenu } from "./components/ExportMenu";
 import { KeyboardShortcuts } from "./components/KeyboardShortcuts";
-import { RecordingControls } from "./components/RecordingControls";
+import { PageGallery } from "./components/PageGallery";
 import { type InteractionMode, ScreenMirror } from "./components/ScreenMirror";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { ThreadView } from "./components/ThreadView";
 import { Timeline } from "./components/Timeline";
 import { Toolbar } from "./components/Toolbar";
 import { useAnnotations } from "./hooks/use-annotations";
+import { useCapturedPages } from "./hooks/use-captured-pages";
 import { useDevices } from "./hooks/use-devices";
 import { useElementTree } from "./hooks/use-element-tree";
 import { type TextRegion, useOcr } from "./hooks/use-ocr";
@@ -64,6 +65,7 @@ export function App() {
 		createAnnotation,
 		reply,
 		updateStatus,
+		deleteAnnotation,
 	} = useAnnotations(activeSessionId);
 
 	// Element tree (pass platform for correct bridge selection)
@@ -96,6 +98,21 @@ export function App() {
 		getFrameUrl,
 	} = useRecording();
 	const [overrideFrameUrl, setOverrideFrameUrl] = useState<string | null>(null);
+
+	// Captured pages gallery
+	const {
+		pages: capturedPages,
+		activePageId,
+		capturePage,
+		deletePage,
+		setActivePage,
+		renamePage,
+	} = useCapturedPages();
+
+	const activeCapturedPage = useMemo(
+		() => (activePageId ? (capturedPages.find((p) => p.id === activePageId) ?? null) : null),
+		[activePageId, capturedPages],
+	);
 
 	// UI state
 	const [clickCoords, setClickCoords] = useState<{
@@ -137,11 +154,12 @@ export function App() {
 	}, [annotations, filters]);
 
 	// Annotations visible on the current screen (filter by screenId for pin display)
-	// When we know the current screen, only show annotations that match it
+	// When viewing a captured page, use its screenId; otherwise use the live screenId
+	const activeScreenId = activeCapturedPage?.screenId ?? screenId;
 	const visibleAnnotations = useMemo(() => {
-		if (!screenId) return filteredAnnotations;
-		return filteredAnnotations.filter((a) => a.screenId === screenId);
-	}, [filteredAnnotations, screenId]);
+		if (!activeScreenId) return filteredAnnotations;
+		return filteredAnnotations.filter((a) => a.screenId === activeScreenId);
+	}, [filteredAnnotations, activeScreenId]);
 
 	// Re-locate annotation pins based on current element positions (scroll-aware)
 	const relocatedAnnotations = useMemo(() => {
@@ -407,6 +425,18 @@ export function App() {
 		setOverrideFrameUrl(null);
 	}, []);
 
+	// Capture current screen as a frozen page
+	const handleCapture = useCallback(() => {
+		if (!frameUrl || !selectedDevice) return;
+		capturePage(
+			frameUrl,
+			elements,
+			selectedDevice.screenWidth,
+			selectedDevice.screenHeight,
+			screenId,
+		);
+	}, [frameUrl, selectedDevice, elements, screenId, capturePage]);
+
 	// Handle text region selection (text mode)
 	const handleTextSelect = useCallback(
 		async (region: TextRegion) => {
@@ -514,15 +544,13 @@ export function App() {
 	const handleClearAll = useCallback(async () => {
 		if (annotations.length === 0) return;
 		const confirmed = window.confirm(
-			`Dismiss all ${annotations.length} annotation${annotations.length === 1 ? "" : "s"}?`,
+			`Delete all ${annotations.length} annotation${annotations.length === 1 ? "" : "s"}?`,
 		);
 		if (!confirmed) return;
 		for (const annotation of annotations) {
-			if (annotation.status !== "dismissed") {
-				await updateStatus(annotation.id, "dismiss");
-			}
+			await deleteAnnotation(annotation.id);
 		}
-	}, [annotations, updateStatus]);
+	}, [annotations, deleteAnnotation]);
 
 	// Keyboard shortcuts — use ref to avoid re-attaching listener on every state change
 	const keyboardStateRef = useRef({
@@ -532,6 +560,7 @@ export function App() {
 		handleCopyAnnotations,
 		handleClearAll,
 		handleToggleAnimations,
+		handleCapture,
 		filteredAnnotations,
 		liveSelectedAnnotation,
 		showShortcuts,
@@ -545,6 +574,7 @@ export function App() {
 		handleCopyAnnotations,
 		handleClearAll,
 		handleToggleAnimations,
+		handleCapture,
 		filteredAnnotations,
 		liveSelectedAnnotation,
 		showShortcuts,
@@ -602,6 +632,13 @@ export function App() {
 			}
 			if (e.key === "c" && !e.metaKey && !e.ctrlKey) {
 				s.handleCopyAnnotations();
+				return;
+			}
+
+			// Capture screen
+			if (e.key === "s" && !e.metaKey && !e.ctrlKey) {
+				e.preventDefault();
+				s.handleCapture();
 				return;
 			}
 
@@ -920,6 +957,17 @@ export function App() {
 				</div>
 			</aside>
 
+			{/* Page gallery (left of screen mirror) */}
+			{connected && capturedPages.length > 0 && (
+				<PageGallery
+					pages={capturedPages}
+					activePageId={activePageId}
+					onSelectPage={setActivePage}
+					onDeletePage={deletePage}
+					onRenamePage={renamePage}
+				/>
+			)}
+
 			{/* Main content area */}
 			<main className="relative flex flex-1 flex-col overflow-hidden">
 				<ScreenMirror
@@ -927,21 +975,22 @@ export function App() {
 					connected={connected}
 					error={mirrorError}
 					annotations={relocatedAnnotations}
+					allAnnotations={filteredAnnotations}
 					selectedAnnotationId={liveSelectedAnnotation?.id ?? null}
 					recentlyResolved={recentlyResolved}
 					interactionMode={interactionMode}
 					textRegions={mergedTextRegions}
 					ocrLoading={ocrLoading}
 					markersHidden={markersHidden}
-					elements={elements}
-					screenWidth={selectedDevice?.screenWidth}
-					screenHeight={selectedDevice?.screenHeight}
+					elements={activeCapturedPage?.elements ?? elements}
+					screenWidth={activeCapturedPage?.screenWidth ?? selectedDevice?.screenWidth}
+					screenHeight={activeCapturedPage?.screenHeight ?? selectedDevice?.screenHeight}
 					pendingElement={clickCoords?.element}
 					onClickScreen={handleScreenClick}
 					onAreaSelect={handleAreaSelect}
 					onTextSelect={handleTextSelect}
 					onSelectAnnotation={handleSelectAnnotation}
-					overrideFrameUrl={overrideFrameUrl}
+					overrideFrameUrl={activeCapturedPage?.screenshotUrl ?? overrideFrameUrl}
 				/>
 
 				{/* Floating toolbar */}
@@ -957,23 +1006,10 @@ export function App() {
 						copyFeedback={copyFeedback}
 						onClearAll={handleClearAll}
 						annotationCount={annotations.length}
+						onCapture={handleCapture}
 						onOpenSettings={() => setSettingsOpen(true)}
 						onOpenShortcuts={() => setShowShortcuts(true)}
 					/>
-				)}
-
-				{/* Recording controls */}
-				{connected && frameUrl && (
-					<div className="pointer-events-none absolute inset-x-0 bottom-16 z-30 flex justify-center">
-						<div className="pointer-events-auto">
-							<RecordingControls
-								isRecording={isRecording}
-								elapsedMs={elapsedMs}
-								onStart={handleStartRecording}
-								onStop={handleStopRecording}
-							/>
-						</div>
-					</div>
 				)}
 
 				{/* Timeline scrubber (visible after recording stops with frames) */}

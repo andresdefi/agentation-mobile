@@ -165,6 +165,10 @@ export class Store {
 		return annotation;
 	}
 
+	deleteAnnotation(id: string): boolean {
+		return this.annotations.delete(id);
+	}
+
 	addThreadMessage(id: string, message: ThreadMessage): MobileAnnotation | undefined {
 		const annotation = this.annotations.get(id);
 		if (!annotation) return undefined;

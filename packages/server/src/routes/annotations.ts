@@ -75,6 +75,17 @@ export function createAnnotationRoutes(store: Store, eventBus: EventBus): Router
 		res.status(201).json(annotation);
 	});
 
+	// Delete annotation
+	router.delete("/:id", (req, res) => {
+		const deleted = store.deleteAnnotation(req.params.id);
+		if (!deleted) {
+			res.status(404).json({ error: "Annotation not found" });
+			return;
+		}
+		eventBus.emit("annotation:deleted", { id: req.params.id }, undefined);
+		res.json({ deleted: true });
+	});
+
 	// Acknowledge
 	router.post("/:id/acknowledge", (req, res) => {
 		const annotation = store.updateAnnotationStatus(req.params.id, "acknowledged");

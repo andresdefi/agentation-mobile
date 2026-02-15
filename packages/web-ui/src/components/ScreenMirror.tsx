@@ -11,6 +11,7 @@ interface ScreenMirrorProps {
 	connected: boolean;
 	error: string | null;
 	annotations: MobileAnnotation[];
+	allAnnotations?: MobileAnnotation[];
 	selectedAnnotationId: string | null;
 	recentlyResolved?: Set<string>;
 	interactionMode: InteractionMode;
@@ -127,6 +128,7 @@ export function ScreenMirror({
 	connected,
 	error,
 	annotations,
+	allAnnotations,
 	selectedAnnotationId,
 	recentlyResolved,
 	interactionMode,
@@ -501,7 +503,10 @@ export function ScreenMirror({
 
 						{/* Annotation pins */}
 						{!markersHidden &&
-							annotations.map((annotation, idx) => {
+							annotations.map((annotation) => {
+								const globalIdx = allAnnotations
+									? allAnnotations.findIndex((a) => a.id === annotation.id) + 1
+									: annotations.indexOf(annotation) + 1;
 								const isResolved = recentlyResolved?.has(annotation.id);
 								const isSelected = selectedAnnotationId === annotation.id;
 
@@ -510,7 +515,7 @@ export function ScreenMirror({
 										<ResolvedPin
 											key={annotation.id}
 											annotation={annotation}
-											index={idx + 1}
+											index={globalIdx}
 											isSelected={isSelected}
 											onSelect={() => onSelectAnnotation(annotation)}
 										/>
@@ -538,7 +543,7 @@ export function ScreenMirror({
 										}}
 										aria-label={`Annotation: ${annotation.comment}`}
 									>
-										{idx + 1}
+										{globalIdx}
 
 										{/* Tooltip on hover */}
 										{hoveredPin === annotation.id && (

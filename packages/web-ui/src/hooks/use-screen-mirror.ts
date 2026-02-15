@@ -22,15 +22,15 @@ interface UseScreenMirrorResult {
 }
 
 /** Thumbnail size for frame comparison (NxN pixels) */
-const THUMB_SIZE = 16;
+const THUMB_SIZE = 24;
 /** Pixel difference threshold (0-255 per channel) to count as "changed" */
-const PIXEL_THRESHOLD = 30;
+const PIXEL_THRESHOLD = 20;
 /** Fraction of pixels that must differ to trigger a screen change */
-const CHANGE_FRACTION = 0.15;
+const CHANGE_FRACTION = 0.04;
 /** Minimum ms between screen-change callbacks */
-const DEBOUNCE_MS = 800;
+const DEBOUNCE_MS = 400;
 /** How often to sample frames for comparison */
-const SAMPLE_INTERVAL_MS = 500;
+const SAMPLE_INTERVAL_MS = 200;
 
 function computeDiff(a: Uint8ClampedArray, b: Uint8ClampedArray): number {
 	const totalPixels = a.length / 4;

@@ -60,5 +60,12 @@ export function useElementTree(deviceId: string | null, platform?: string): UseE
 		fetchElements();
 	}, [fetchElements]);
 
+	// Periodic refresh as fallback for scroll/layout changes the visual diff misses
+	useEffect(() => {
+		if (!deviceId) return;
+		const interval = setInterval(fetchElements, 3000);
+		return () => clearInterval(interval);
+	}, [deviceId, fetchElements]);
+
 	return { elements, screenId, loading, error, refresh: fetchElements };
 }

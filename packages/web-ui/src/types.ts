@@ -110,6 +110,17 @@ export interface SessionWithAnnotations extends Session {
 	annotations: MobileAnnotation[];
 }
 
+export interface CapturedPage {
+	id: string;
+	screenshotUrl: string;
+	elements: MobileElement[];
+	screenWidth: number;
+	screenHeight: number;
+	screenId: string | null;
+	timestamp: number;
+	label?: string;
+}
+
 export interface CreateAnnotationPayload {
 	sessionId: string;
 	x: number;

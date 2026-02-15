@@ -13,6 +13,7 @@ interface UseAnnotationsResult {
 		annotationId: string,
 		action: "acknowledge" | "resolve" | "dismiss",
 	) => Promise<MobileAnnotation>;
+	deleteAnnotation: (annotationId: string) => Promise<void>;
 	refresh: () => Promise<void>;
 }
 
@@ -190,6 +191,11 @@ export function useAnnotations(sessionId: string | null): UseAnnotationsResult {
 		[],
 	);
 
+	const deleteAnnotation = useCallback(async (annotationId: string): Promise<void> => {
+		await apiFetch(`/api/annotations/${annotationId}`, { method: "DELETE" });
+		setAnnotations((prev) => prev.filter((a) => a.id !== annotationId));
+	}, []);
+
 	return {
 		annotations,
 		loading,
@@ -198,6 +204,7 @@ export function useAnnotations(sessionId: string | null): UseAnnotationsResult {
 		createAnnotation,
 		reply,
 		updateStatus,
+		deleteAnnotation,
 		refresh: fetchAnnotations,
 	};
 }
