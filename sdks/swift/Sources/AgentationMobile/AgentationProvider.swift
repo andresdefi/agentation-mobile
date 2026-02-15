@@ -44,17 +44,22 @@ public final class AgentationProvider: ObservableObject {
     private let decoder = JSONDecoder()
     private let encoder = JSONEncoder()
 
+    private var reportTimer: Timer?
+
     public init(config: AgentationConfig) {
         self.config = config
         guard config.enabled else { return }
         loadFromStorage()
+        AnimationDetector.shared.install()
         if !localMode {
             startPolling()
+            startReporting()
         }
     }
 
     deinit {
         pollTimer?.invalidate()
+        reportTimer?.invalidate()
     }
 
     // MARK: - Local Storage
@@ -106,6 +111,55 @@ public final class AgentationProvider: ObservableObject {
                 saveToStorage()
             } catch {
                 connected = false
+            }
+        }
+    }
+
+    // MARK: - SDK Reporting
+
+    private func startReporting() {
+        reportTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.reportToBackend()
+            }
+        }
+    }
+
+    private func reportToBackend() {
+        guard let serverUrl = config.serverUrl else { return }
+        let deviceId = (config.deviceId ?? "ios-device").addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? "ios-device"
+        guard let url = URL(string: "\(serverUrl)/api/devices/\(deviceId)/sdk-report") else { return }
+
+        let animations = AnimationDetector.shared.getActiveAnimations()
+        let elements = ElementInspector.shared.getMobileElements()
+
+        guard !animations.isEmpty || !elements.isEmpty else { return }
+
+        Task {
+            do {
+                var request = URLRequest(url: url)
+                request.httpMethod = "POST"
+                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+                let payload: [String: Any] = [
+                    "timestamp": Int(Date().timeIntervalSince1970 * 1000)
+                ]
+
+                // Encode animations and elements separately then combine
+                let animData = try encoder.encode(animations)
+                let elemData = try encoder.encode(elements)
+
+                let animJson = String(data: animData, encoding: .utf8) ?? "[]"
+                let elemJson = String(data: elemData, encoding: .utf8) ?? "[]"
+
+                let bodyString = """
+                {"animations":\(animJson),"elements":\(elemJson),"timestamp":\(payload["timestamp"]!)}
+                """
+
+                request.httpBody = bodyString.data(using: .utf8)
+                let _ = try await session.data(for: request)
+            } catch {
+                // Silently ignore — server may be unreachable
             }
         }
     }

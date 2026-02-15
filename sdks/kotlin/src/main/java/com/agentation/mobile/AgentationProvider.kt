@@ -40,22 +40,27 @@ class AgentationProvider(
     val localMode: Boolean get() = config.normalizedUrl == null
 
     private var pollJob: Job? = null
+    private var reportJob: Job? = null
 
     companion object {
         private const val STORAGE_KEY = "agentation_mobile_annotations"
         private const val POLL_INTERVAL_MS = 3000L
+        private const val REPORT_INTERVAL_MS = 1000L
     }
 
     init {
         if (config.enabled) {
             loadFromStorage()
+            AnimationDetector.install()
             if (!localMode) {
                 startPolling()
+                startReporting()
             }
         }
     }
 
     fun destroy() {
+        AnimationDetector.uninstall()
         scope.cancel()
     }
 
@@ -117,6 +122,48 @@ class AgentationProvider(
                 withContext(Dispatchers.Main) {
                     _connected.value = false
                 }
+            }
+        }
+    }
+
+    // SDK Reporting
+
+    private fun startReporting() {
+        reportJob = scope.launch {
+            while (isActive) {
+                delay(REPORT_INTERVAL_MS)
+                reportToBackend()
+            }
+        }
+    }
+
+    private suspend fun reportToBackend() {
+        val serverUrl = config.normalizedUrl ?: return
+        val deviceId = java.net.URLEncoder.encode(config.deviceId ?: "android-device", "UTF-8")
+
+        val animations = AnimationDetector.getActiveAnimations()
+        val elements = ElementInspector.getElements()
+
+        if (animations.isEmpty() && elements.isEmpty()) return
+
+        withContext(Dispatchers.IO) {
+            try {
+                val url = URL("$serverUrl/api/devices/$deviceId/sdk-report")
+                val conn = url.openConnection() as HttpURLConnection
+                conn.requestMethod = "POST"
+                conn.setRequestProperty("Content-Type", "application/json")
+                conn.doOutput = true
+                conn.connectTimeout = 5000
+
+                val animJson = json.encodeToString(animations)
+                val elemJson = json.encodeToString(elements)
+                val body = """{"animations":$animJson,"elements":$elemJson,"timestamp":${System.currentTimeMillis()}}"""
+
+                conn.outputStream.bufferedWriter().use { it.write(body) }
+                conn.responseCode // trigger the request
+                conn.disconnect()
+            } catch (_: Exception) {
+                // Silently ignore — server may be unreachable
             }
         }
     }

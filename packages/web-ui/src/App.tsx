@@ -30,7 +30,7 @@ import type {
 	MobileElement,
 	SelectedArea,
 } from "./types";
-import { cn, getElementDisplayName } from "./utils";
+import { cn, getElementDisplayName, hitTestElement } from "./utils";
 
 export function App() {
 	// Theme state — light mode by default
@@ -386,6 +386,17 @@ export function App() {
 			if (!activeSessionId || !selectedDevice) return;
 			setClickCoords({ x, y, anchorX, anchorY, inspecting: true });
 
+			// When viewing a captured page, use local hit-testing against the page's stored elements
+			// instead of calling the server's live inspect API (which returns elements from the current screen)
+			if (activeCapturedPage) {
+				const pageElements = activeCapturedPage.elements ?? [];
+				const screenW = activeCapturedPage.screenWidth ?? selectedDevice.screenWidth;
+				const screenH = activeCapturedPage.screenHeight ?? selectedDevice.screenHeight;
+				const element = hitTestElement(pageElements, x, y, screenW, screenH);
+				setClickCoords((prev) => (prev ? { ...prev, element, inspecting: false } : null));
+				return;
+			}
+
 			const pixelX = Math.round((x / 100) * selectedDevice.screenWidth);
 			const pixelY = Math.round((y / 100) * selectedDevice.screenHeight);
 
@@ -396,7 +407,7 @@ export function App() {
 				setClickCoords((prev) => (prev ? { ...prev, element: null, inspecting: false } : null));
 			}
 		},
-		[activeSessionId, selectedDevice, inspectUrl],
+		[activeSessionId, selectedDevice, inspectUrl, activeCapturedPage],
 	);
 
 	// Recording: start
@@ -510,7 +521,7 @@ export function App() {
 					platform: selectedDevice.platform,
 					screenWidth: selectedDevice.screenWidth,
 					screenHeight: selectedDevice.screenHeight,
-					screenId: screenId ?? undefined,
+					screenId: activeScreenId ?? undefined,
 					comment,
 					intent: "fix",
 					severity: "important",
@@ -523,7 +534,7 @@ export function App() {
 				setSubmittingAnnotation(false);
 			}
 		},
-		[clickCoords, activeSessionId, selectedDevice, screenId, createAnnotation],
+		[clickCoords, activeSessionId, selectedDevice, activeScreenId, createAnnotation],
 	);
 
 	const handleToggleAnimations = useCallback(async () => {

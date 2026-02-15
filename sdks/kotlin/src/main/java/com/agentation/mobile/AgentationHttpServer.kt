@@ -109,6 +109,10 @@ class AgentationHttpServer(
                     val body = ElementInspector.toJson()
                     sendResponse(writer, 200, body)
                 }
+                "/agentation/animations" -> {
+                    val body = AnimationDetector.toJson()
+                    sendResponse(writer, 200, body)
+                }
                 "/agentation/element" -> {
                     val x = queryParams["x"]?.toDoubleOrNull()
                     val y = queryParams["y"]?.toDoubleOrNull()

@@ -6,6 +6,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:agentation_mobile/src/models.dart';
+import 'package:agentation_mobile/src/animation_detector.dart';
+import 'package:agentation_mobile/src/element_collector.dart';
 
 const _storageKey = 'agentation_mobile_annotations';
 
@@ -79,13 +81,23 @@ class AgentationState extends State<AgentationProvider> {
   List<MobileAnnotation> _annotations = [];
   bool _connected = false;
   Timer? _pollTimer;
+  Timer? _reportTimer;
   HttpClient? _httpClient;
   SharedPreferences? _prefs;
+  List<DetectedAnimation> _activeAnimations = [];
+  List<CollectedElement> _collectedElements = [];
+  VoidCallback? _animationListener;
 
   List<MobileAnnotation> get annotations => _annotations;
   bool get connected => localMode ? true : _connected;
   bool get localMode => widget.config.serverUrl == null;
   AgentationConfig get config => widget.config;
+
+  /// Currently active/recent animations detected in the app.
+  List<DetectedAnimation> get activeAnimations => _activeAnimations;
+
+  /// Collected element tree from the widget tree.
+  List<CollectedElement> get collectedElements => _collectedElements;
 
   @override
   void initState() {
@@ -100,10 +112,22 @@ class AgentationState extends State<AgentationProvider> {
     _prefs = await SharedPreferences.getInstance();
     _loadFromStorage();
 
-    // If server mode, start polling
+    // Install animation detector
+    AnimationDetector.instance.install();
+    _animationListener = () {
+      if (mounted) {
+        setState(() {
+          _activeAnimations = AnimationDetector.instance.activeAnimations;
+        });
+      }
+    };
+    AnimationDetector.instance.addListener(_animationListener!);
+
+    // If server mode, start polling and reporting
     if (!localMode) {
       _httpClient = HttpClient();
       _startPolling();
+      _startReporting();
     }
   }
 
@@ -144,6 +168,11 @@ class AgentationState extends State<AgentationProvider> {
   @override
   void dispose() {
     _stopPolling();
+    _stopReporting();
+    if (_animationListener != null) {
+      AnimationDetector.instance.removeListener(_animationListener!);
+    }
+    AnimationDetector.instance.uninstall();
     _httpClient?.close();
     super.dispose();
   }
@@ -159,6 +188,50 @@ class AgentationState extends State<AgentationProvider> {
   void _stopPolling() {
     _pollTimer?.cancel();
     _pollTimer = null;
+  }
+
+  void _startReporting() {
+    _reportTimer = Timer.periodic(
+      const Duration(seconds: 1),
+      (_) => _reportToBackend(),
+    );
+  }
+
+  void _stopReporting() {
+    _reportTimer?.cancel();
+    _reportTimer = null;
+  }
+
+  Future<void> _reportToBackend() async {
+    if (_httpClient == null || !mounted) return;
+
+    try {
+      // Collect element tree
+      final elements = ElementCollector.instance.collectElements();
+      if (mounted) {
+        _collectedElements = elements;
+      }
+
+      // Get active animations
+      final animations = AnimationDetector.instance.activeAnimations;
+
+      if (animations.isEmpty && elements.isEmpty) return;
+
+      final deviceId = widget.config.deviceId ?? 'flutter-device';
+      final uri = Uri.parse(
+        '${widget.config.serverUrl}/api/devices/${Uri.encodeComponent(deviceId)}/sdk-report',
+      );
+      final request = await _httpClient!.postUrl(uri);
+      request.headers.set('Content-Type', 'application/json');
+      request.write(jsonEncode({
+        'animations': animations.map((a) => a.toJson()).toList(),
+        'elements': elements.map((e) => e.toJson()).toList(),
+        'timestamp': DateTime.now().millisecondsSinceEpoch,
+      }));
+      await request.close();
+    } catch (_) {
+      // Silently ignore — server may be unreachable
+    }
   }
 
   Future<void> _fetchAnnotations() async {

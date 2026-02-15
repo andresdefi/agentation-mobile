@@ -2,6 +2,15 @@ import type { CreateAnnotationInput, MobileAnnotation } from "@agentation-mobile
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import type React from "react";
 import { createContext, useCallback, useEffect, useRef, useState } from "react";
+import {
+	type DetectedAnimation,
+	getActiveAnimations,
+	installAnimationDetector,
+	onAnimationChange,
+	uninstallAnimationDetector,
+} from "./AnimationDetector";
+import { collectElementTreeAsync } from "./ElementCollector";
+import type { CollectedElement } from "./ElementCollector";
 
 const STORAGE_KEY = "@agentation-mobile/annotations";
 
@@ -22,6 +31,10 @@ export interface AgentationContextValue {
 	createAnnotation: (data: CreateAnnotationInput) => Promise<void>;
 	/** Export all annotations as structured text for pasting into AI tools. */
 	exportAnnotations: () => string;
+	/** Currently active/recent animations detected in the app. */
+	activeAnimations: DetectedAnimation[];
+	/** Collected element tree from the React fiber tree. */
+	elements: CollectedElement[];
 }
 
 export const AgentationContext = createContext<AgentationContextValue | null>(null);
@@ -42,6 +55,8 @@ export function AgentationProvider({
 }: AgentationConfig & { children: React.ReactNode }) {
 	const [annotations, setAnnotations] = useState<MobileAnnotation[]>([]);
 	const [connected, setConnected] = useState(false);
+	const [activeAnims, setActiveAnims] = useState<DetectedAnimation[]>([]);
+	const [collectedElements, setCollectedElements] = useState<CollectedElement[]>([]);
 	const wsRef = useRef<WebSocket | null>(null);
 	const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 	const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -252,6 +267,62 @@ export function AgentationProvider({
 		};
 	}, [isActive, localMode, connectWebSocket, fetchAnnotations, sessionId]);
 
+	// Install animation detector and subscribe to changes
+	useEffect(() => {
+		if (!isActive) return;
+
+		installAnimationDetector();
+
+		const unsubscribe = onAnimationChange(() => {
+			if (mountedRef.current) {
+				setActiveAnims(getActiveAnimations());
+			}
+		});
+
+		return () => {
+			unsubscribe();
+			uninstallAnimationDetector();
+		};
+	}, [isActive]);
+
+	// Periodically collect element tree and report animations to the backend
+	useEffect(() => {
+		if (!isActive || localMode || !normalizedUrl) return;
+
+		const reportInterval = setInterval(async () => {
+			if (!mountedRef.current) return;
+
+			// Collect element tree
+			const elements = await collectElementTreeAsync();
+			if (mountedRef.current) {
+				setCollectedElements(elements);
+			}
+
+			// Report animations + elements to backend
+			const animations = getActiveAnimations();
+			if (animations.length > 0 || elements.length > 0) {
+				try {
+					await fetch(
+						`${normalizedUrl}/api/devices/${encodeURIComponent(deviceId ?? "unknown")}/sdk-report`,
+						{
+							method: "POST",
+							headers: { "Content-Type": "application/json" },
+							body: JSON.stringify({
+								animations,
+								elements,
+								timestamp: Date.now(),
+							}),
+						},
+					);
+				} catch {
+					// Silently ignore — server may be unreachable
+				}
+			}
+		}, 1000);
+
+		return () => clearInterval(reportInterval);
+	}, [isActive, localMode, normalizedUrl, deviceId]);
+
 	const contextValue: AgentationContextValue = {
 		annotations,
 		connected: localMode ? true : connected,
@@ -259,6 +330,8 @@ export function AgentationProvider({
 		serverUrl: normalizedUrl,
 		createAnnotation,
 		exportAnnotations,
+		activeAnimations: activeAnims,
+		elements: collectedElements,
 	};
 
 	return <AgentationContext.Provider value={contextValue}>{children}</AgentationContext.Provider>;

@@ -132,6 +132,16 @@ public final class AgentationHttpServer: @unchecked Sendable {
             }
             sendResponse(fd, status: 200, body: body)
 
+        case "/agentation/animations":
+            let animations = AnimationDetector.shared.getActiveAnimations()
+            let encoder = JSONEncoder()
+            if let data = try? encoder.encode(animations),
+               let json = String(data: data, encoding: .utf8) {
+                sendResponse(fd, status: 200, body: json)
+            } else {
+                sendResponse(fd, status: 200, body: "[]")
+            }
+
         case "/agentation/element":
             guard let xStr = queryParams["x"], let x = Double(xStr),
                   let yStr = queryParams["y"], let y = Double(yStr) else {
