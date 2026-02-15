@@ -42,8 +42,11 @@ class AgentationProvider(
     private var pollJob: Job? = null
     private var reportJob: Job? = null
 
+    private val pendingIds: MutableSet<String> = mutableSetOf()
+
     companion object {
         private const val STORAGE_KEY = "agentation_mobile_annotations"
+        private const val PENDING_IDS_KEY = "agentation_mobile_pending_ids"
         private const val POLL_INTERVAL_MS = 3000L
         private const val REPORT_INTERVAL_MS = 1000L
     }
@@ -51,6 +54,7 @@ class AgentationProvider(
     init {
         if (config.enabled) {
             loadFromStorage()
+            loadPendingIds()
             AnimationDetector.install()
             if (!localMode) {
                 startPolling()
@@ -84,6 +88,69 @@ class AgentationProvider(
         }
     }
 
+    private fun loadPendingIds() {
+        val stored = prefs.getString(PENDING_IDS_KEY, null) ?: return
+        try {
+            pendingIds.addAll(json.decodeFromString<List<String>>(stored))
+        } catch (_: Exception) {
+            // Ignore corrupted storage
+        }
+    }
+
+    private fun savePendingIds() {
+        try {
+            prefs.edit().putString(PENDING_IDS_KEY, json.encodeToString(pendingIds.toList())).apply()
+        } catch (_: Exception) {
+            // Ignore storage write errors
+        }
+    }
+
+    // Upload pending
+
+    private suspend fun uploadPending() {
+        val serverUrl = config.normalizedUrl ?: return
+        if (pendingIds.isEmpty()) return
+
+        val pending = _annotations.value.filter { it.id in pendingIds }
+        for (annotation in pending) {
+            withContext(Dispatchers.IO) {
+                try {
+                    val url = URL("$serverUrl/api/annotations")
+                    val conn = url.openConnection() as HttpURLConnection
+                    conn.requestMethod = "POST"
+                    conn.setRequestProperty("Content-Type", "application/json")
+                    conn.doOutput = true
+                    conn.connectTimeout = 10_000
+
+                    val input = CreateAnnotationInput(
+                        sessionId = annotation.sessionId,
+                        x = annotation.x,
+                        y = annotation.y,
+                        deviceId = annotation.deviceId,
+                        screenWidth = annotation.screenWidth,
+                        screenHeight = annotation.screenHeight,
+                        comment = annotation.comment,
+                        intent = annotation.intent,
+                        severity = annotation.severity,
+                    )
+                    conn.outputStream.bufferedWriter().use { it.write(json.encodeToString(input)) }
+
+                    if (conn.responseCode in 200..201) {
+                        withContext(Dispatchers.Main) {
+                            pendingIds.remove(annotation.id)
+                        }
+                    }
+                    conn.disconnect()
+                } catch (_: Exception) {
+                    // Will retry on next fetch cycle
+                }
+            }
+        }
+        withContext(Dispatchers.Main) {
+            savePendingIds()
+        }
+    }
+
     // Polling
 
     private fun startPolling() {
@@ -102,6 +169,9 @@ class AgentationProvider(
 
         scope.launch(Dispatchers.IO) {
             try {
+                // Upload pending annotations first
+                uploadPending()
+
                 val url = URL("$serverUrl/api/annotations?sessionId=${java.net.URLEncoder.encode(sessionId, "UTF-8")}")
                 val conn = url.openConnection() as HttpURLConnection
                 conn.requestMethod = "GET"
@@ -110,9 +180,14 @@ class AgentationProvider(
 
                 if (conn.responseCode == 200) {
                     val body = conn.inputStream.bufferedReader().readText()
-                    val fetched = json.decodeFromString<List<MobileAnnotation>>(body)
+                    val serverAnnotations = json.decodeFromString<List<MobileAnnotation>>(body)
                     withContext(Dispatchers.Main) {
-                        _annotations.value = fetched
+                        // Merge: server data + remaining unsynced locals
+                        val serverIds = serverAnnotations.map { it.id }.toSet()
+                        val stillPending = _annotations.value.filter {
+                            it.id in pendingIds && it.id !in serverIds
+                        }
+                        _annotations.value = serverAnnotations + stillPending
                         _connected.value = true
                         saveToStorage()
                     }
@@ -179,27 +254,33 @@ class AgentationProvider(
         screenWidth: Int,
         screenHeight: Int,
     ) {
-        if (localMode) {
-            val now = Instant.now().toString()
-            val id = "${System.currentTimeMillis()}-${UUID.randomUUID().toString().take(7)}"
-            val annotation = MobileAnnotation(
-                id = id,
-                sessionId = config.sessionId ?: "local",
-                x = x,
-                y = y,
-                deviceId = config.deviceId ?: "android-device",
-                platform = "android-native",
-                screenWidth = screenWidth,
-                screenHeight = screenHeight,
-                comment = comment,
-                intent = intent,
-                severity = severity,
-                createdAt = now,
-                updatedAt = now,
-            )
-            _annotations.value = _annotations.value + annotation
-            saveToStorage()
-        } else {
+        // Always create locally first
+        val now = Instant.now().toString()
+        val id = "${System.currentTimeMillis()}-${UUID.randomUUID().toString().take(7)}"
+        val annotation = MobileAnnotation(
+            id = id,
+            sessionId = config.sessionId ?: "local",
+            x = x,
+            y = y,
+            deviceId = config.deviceId ?: "android-device",
+            platform = "android-native",
+            screenWidth = screenWidth,
+            screenHeight = screenHeight,
+            comment = comment,
+            intent = intent,
+            severity = severity,
+            createdAt = now,
+            updatedAt = now,
+        )
+
+        pendingIds.add(id)
+        savePendingIds()
+
+        _annotations.value = _annotations.value + annotation
+        saveToStorage()
+
+        // If server mode, try to upload immediately
+        if (!localMode) {
             val serverUrl = config.normalizedUrl ?: return
             val input = CreateAnnotationInput(
                 sessionId = config.sessionId ?: "",
@@ -225,11 +306,15 @@ class AgentationProvider(
                     conn.outputStream.bufferedWriter().use { it.write(json.encodeToString(input)) }
 
                     if (conn.responseCode in 200..201) {
-                        withContext(Dispatchers.Main) { fetchAnnotations() }
+                        withContext(Dispatchers.Main) {
+                            pendingIds.remove(id)
+                            savePendingIds()
+                            fetchAnnotations()
+                        }
                     }
                     conn.disconnect()
                 } catch (_: Exception) {
-                    // Silently fail -- dev tool
+                    // Stays in pending, will be uploaded on next fetch cycle
                 }
             }
         }

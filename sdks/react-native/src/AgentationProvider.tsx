@@ -13,6 +13,7 @@ import { collectElementTreeAsync } from "./ElementCollector";
 import type { CollectedElement } from "./ElementCollector";
 
 const STORAGE_KEY = "@agentation-mobile/annotations";
+const PENDING_IDS_KEY = "@agentation-mobile/pending-ids";
 
 export interface AgentationConfig {
 	/** Server URL. If omitted, runs in local-only mode (annotations stored on device). */
@@ -61,6 +62,7 @@ export function AgentationProvider({
 	const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 	const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const mountedRef = useRef(true);
+	const pendingIdsRef = useRef<Set<string>>(new Set());
 
 	// Only active in dev mode and when enabled
 	const isActive = typeof __DEV__ !== "undefined" ? __DEV__ && enabled : enabled;
@@ -68,43 +70,104 @@ export function AgentationProvider({
 	const normalizedUrl = serverUrl?.replace(/\/$/, "") ?? null;
 	const localMode = normalizedUrl === null;
 
-	// Load annotations from local storage on mount
+	// Persist pending IDs to storage
+	const persistPendingIds = useCallback(() => {
+		AsyncStorage.setItem(PENDING_IDS_KEY, JSON.stringify([...pendingIdsRef.current])).catch(
+			() => {},
+		);
+	}, []);
+
+	// Load annotations and pending IDs from local storage on mount
 	useEffect(() => {
 		if (!isActive) return;
-		AsyncStorage.getItem(STORAGE_KEY)
-			.then((stored) => {
-				if (stored && mountedRef.current) {
+		Promise.all([AsyncStorage.getItem(STORAGE_KEY), AsyncStorage.getItem(PENDING_IDS_KEY)])
+			.then(([stored, pendingStored]) => {
+				if (!mountedRef.current) return;
+				if (stored) {
 					const parsed = JSON.parse(stored) as MobileAnnotation[];
 					setAnnotations(parsed);
 				}
+				if (pendingStored) {
+					const ids = JSON.parse(pendingStored) as string[];
+					pendingIdsRef.current = new Set(ids);
+				}
 			})
-			.catch(() => {
-				// Ignore storage read errors
-			});
+			.catch(() => {});
 	}, [isActive]);
 
 	// Persist annotations to local storage whenever they change
 	const persistAnnotations = useCallback((anns: MobileAnnotation[]) => {
-		AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(anns)).catch(() => {
-			// Ignore storage write errors
-		});
+		AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(anns)).catch(() => {});
 	}, []);
 
+	// Upload pending local annotations to the server
+	const uploadPending = useCallback(
+		async (currentAnnotations: MobileAnnotation[]) => {
+			if (!normalizedUrl || pendingIdsRef.current.size === 0) return;
+
+			const pending = currentAnnotations.filter((a) => pendingIdsRef.current.has(a.id));
+			for (const annotation of pending) {
+				try {
+					const response = await fetch(`${normalizedUrl}/api/annotations`, {
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({
+							sessionId: annotation.sessionId,
+							x: annotation.x,
+							y: annotation.y,
+							deviceId: annotation.deviceId,
+							platform: annotation.platform,
+							screenWidth: annotation.screenWidth,
+							screenHeight: annotation.screenHeight,
+							screenshotId: annotation.screenshotId,
+							comment: annotation.comment,
+							intent: annotation.intent,
+							severity: annotation.severity,
+							element: annotation.element,
+							selectedArea: annotation.selectedArea,
+							selectedText: annotation.selectedText,
+						}),
+					});
+					if (response.ok) {
+						pendingIdsRef.current.delete(annotation.id);
+					}
+				} catch {
+					// Will retry on next fetch cycle
+				}
+			}
+			persistPendingIds();
+		},
+		[normalizedUrl, persistPendingIds],
+	);
+
 	// Fetch annotations from the REST API (server mode only)
+	// Merges server data with any remaining unsynced local annotations
 	const fetchAnnotations = useCallback(async () => {
 		if (!sessionId || !mountedRef.current || !normalizedUrl) return;
 		try {
 			const url = `${normalizedUrl}/api/annotations?sessionId=${encodeURIComponent(sessionId)}`;
 			const response = await fetch(url);
 			if (response.ok && mountedRef.current) {
-				const data = (await response.json()) as MobileAnnotation[];
-				setAnnotations(data);
-				persistAnnotations(data);
+				const serverData = (await response.json()) as MobileAnnotation[];
+
+				setAnnotations((prev) => {
+					// Upload any pending annotations first
+					uploadPending(prev);
+
+					// Merge: server data + remaining unsynced locals
+					const serverIds = new Set(serverData.map((a) => a.id));
+					const stillPending = prev.filter(
+						(a) => pendingIdsRef.current.has(a.id) && !serverIds.has(a.id),
+					);
+					const merged = [...serverData, ...stillPending];
+					persistAnnotations(merged);
+					return merged;
+				});
 			}
 		} catch {
 			// Silently ignore fetch errors — the server may be unreachable
 		}
-	}, [normalizedUrl, sessionId, persistAnnotations]);
+	}, [normalizedUrl, sessionId, persistAnnotations, uploadPending]);
 
 	// Connect WebSocket (server mode only)
 	const connectWebSocket = useCallback(() => {
@@ -134,17 +197,22 @@ export function AgentationProvider({
 					annotations?: MobileAnnotation[];
 				};
 				if (message.type === "annotations" && message.annotations) {
-					setAnnotations(message.annotations);
-					persistAnnotations(message.annotations);
+					setAnnotations((prev) => {
+						const serverIds = new Set(message.annotations?.map((a) => a.id) ?? []);
+						const stillPending = prev.filter(
+							(a) => pendingIdsRef.current.has(a.id) && !serverIds.has(a.id),
+						);
+						const merged = [...(message.annotations ?? []), ...stillPending];
+						persistAnnotations(merged);
+						return merged;
+					});
 				}
 			} catch {
 				// Ignore malformed messages
 			}
 		};
 
-		ws.onerror = () => {
-			// WebSocket errors are handled via onclose
-		};
+		ws.onerror = () => {};
 
 		ws.onclose = () => {
 			if (mountedRef.current) {
@@ -160,53 +228,61 @@ export function AgentationProvider({
 		wsRef.current = ws;
 	}, [isActive, normalizedUrl, deviceId, sessionId, persistAnnotations]);
 
-	// Create annotation — local or server
+	// Create annotation — always local-first, then sync to server
 	const createAnnotation = useCallback(
 		async (data: CreateAnnotationInput) => {
-			if (localMode) {
-				// Local-only mode: create annotation locally
-				const now = new Date().toISOString();
-				const annotation: MobileAnnotation = {
-					id: generateId(),
-					sessionId: data.sessionId,
-					x: data.x,
-					y: data.y,
-					deviceId: data.deviceId,
-					platform: data.platform,
-					screenWidth: data.screenWidth,
-					screenHeight: data.screenHeight,
-					screenshotId: data.screenshotId,
-					comment: data.comment,
-					intent: data.intent,
-					severity: data.severity,
-					status: "pending",
-					element: data.element,
-					selectedArea: data.selectedArea,
-					selectedText: data.selectedText,
-					thread: [],
-					createdAt: now,
-					updatedAt: now,
-				};
-				setAnnotations((prev) => {
-					const next = [...prev, annotation];
-					persistAnnotations(next);
-					return next;
-				});
-			} else {
-				// Server mode: POST to server
-				const url = `${normalizedUrl}/api/annotations`;
-				const response = await fetch(url, {
-					method: "POST",
-					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify(data),
-				});
-				if (!response.ok) {
-					throw new Error(`Failed to create annotation: ${response.status}`);
+			// Always create locally first
+			const now = new Date().toISOString();
+			const annotation: MobileAnnotation = {
+				id: generateId(),
+				sessionId: data.sessionId,
+				x: data.x,
+				y: data.y,
+				deviceId: data.deviceId,
+				platform: data.platform,
+				screenWidth: data.screenWidth,
+				screenHeight: data.screenHeight,
+				screenshotId: data.screenshotId,
+				comment: data.comment,
+				intent: data.intent,
+				severity: data.severity,
+				status: "pending",
+				element: data.element,
+				selectedArea: data.selectedArea,
+				selectedText: data.selectedText,
+				thread: [],
+				createdAt: now,
+				updatedAt: now,
+			};
+
+			pendingIdsRef.current.add(annotation.id);
+			persistPendingIds();
+
+			setAnnotations((prev) => {
+				const next = [...prev, annotation];
+				persistAnnotations(next);
+				return next;
+			});
+
+			// If server mode, try to upload immediately
+			if (!localMode && normalizedUrl) {
+				try {
+					const response = await fetch(`${normalizedUrl}/api/annotations`, {
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify(data),
+					});
+					if (response.ok) {
+						pendingIdsRef.current.delete(annotation.id);
+						persistPendingIds();
+						await fetchAnnotations();
+					}
+				} catch {
+					// Stays in pending, will be uploaded on next fetch cycle
 				}
-				await fetchAnnotations();
 			}
 		},
-		[localMode, normalizedUrl, fetchAnnotations, persistAnnotations],
+		[localMode, normalizedUrl, fetchAnnotations, persistAnnotations, persistPendingIds],
 	);
 
 	// Export annotations as structured text (for sharing/pasting into AI tools)

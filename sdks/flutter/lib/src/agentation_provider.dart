@@ -10,6 +10,7 @@ import 'package:agentation_mobile/src/animation_detector.dart';
 import 'package:agentation_mobile/src/element_collector.dart';
 
 const _storageKey = 'agentation_mobile_annotations';
+const _pendingIdsKey = 'agentation_mobile_pending_ids';
 
 /// Configuration for the agentation-mobile connection.
 class AgentationConfig {
@@ -87,6 +88,7 @@ class AgentationState extends State<AgentationProvider> {
   List<DetectedAnimation> _activeAnimations = [];
   List<CollectedElement> _collectedElements = [];
   VoidCallback? _animationListener;
+  final Set<String> _pendingIds = {};
 
   List<MobileAnnotation> get annotations => _annotations;
   bool get connected => localMode ? true : _connected;
@@ -111,6 +113,7 @@ class AgentationState extends State<AgentationProvider> {
     // Load from local storage first
     _prefs = await SharedPreferences.getInstance();
     _loadFromStorage();
+    _loadPendingIds();
 
     // Install animation detector
     AnimationDetector.instance.install();
@@ -147,9 +150,25 @@ class AgentationState extends State<AgentationProvider> {
     }
   }
 
+  void _loadPendingIds() {
+    final stored = _prefs?.getString(_pendingIdsKey);
+    if (stored != null) {
+      try {
+        final list = jsonDecode(stored) as List<dynamic>;
+        _pendingIds.addAll(list.cast<String>());
+      } catch (_) {
+        // Ignore corrupted storage
+      }
+    }
+  }
+
   void _saveToStorage() {
     final data = jsonEncode(_annotations.map((a) => a.toJson()).toList());
     _prefs?.setString(_storageKey, data);
+  }
+
+  void _savePendingIds() {
+    _prefs?.setString(_pendingIdsKey, jsonEncode(_pendingIds.toList()));
   }
 
   @override
@@ -234,9 +253,45 @@ class AgentationState extends State<AgentationProvider> {
     }
   }
 
+  /// Upload pending local annotations to the server.
+  Future<void> _uploadPending() async {
+    if (_httpClient == null || _pendingIds.isEmpty) return;
+
+    final pending = _annotations.where((a) => _pendingIds.contains(a.id)).toList();
+    for (final annotation in pending) {
+      try {
+        final uri = Uri.parse('${widget.config.serverUrl}/api/annotations');
+        final request = await _httpClient!.postUrl(uri);
+        request.headers.set('Content-Type', 'application/json');
+        request.write(jsonEncode({
+          'sessionId': annotation.sessionId,
+          'x': annotation.x,
+          'y': annotation.y,
+          'deviceId': annotation.deviceId,
+          'platform': annotation.platform,
+          'screenWidth': annotation.screenWidth,
+          'screenHeight': annotation.screenHeight,
+          'comment': annotation.comment,
+          'intent': annotation.intent.name,
+          'severity': annotation.severity.name,
+        }));
+        final response = await request.close();
+        if (response.statusCode == 200 || response.statusCode == 201) {
+          _pendingIds.remove(annotation.id);
+        }
+      } catch (_) {
+        // Will retry on next fetch cycle
+      }
+    }
+    _savePendingIds();
+  }
+
   Future<void> _fetchAnnotations() async {
     if (widget.config.sessionId == null || _httpClient == null) return;
     try {
+      // Upload pending annotations first
+      await _uploadPending();
+
       final uri = Uri.parse(
         '${widget.config.serverUrl}/api/annotations?sessionId=${widget.config.sessionId}',
       );
@@ -245,11 +300,20 @@ class AgentationState extends State<AgentationProvider> {
       if (response.statusCode == 200) {
         final body = await response.transform(utf8.decoder).join();
         final list = jsonDecode(body) as List<dynamic>;
+        final serverAnnotations = list
+            .map((j) => MobileAnnotation.fromJson(j as Map<String, dynamic>))
+            .toList();
+
         if (mounted) {
+          // Merge: server data + remaining unsynced locals
+          final serverIds = serverAnnotations.map((a) => a.id).toSet();
+          final stillPending = _annotations
+              .where((a) => _pendingIds.contains(a.id) && !serverIds.contains(a.id))
+              .toList();
+          final merged = [...serverAnnotations, ...stillPending];
+
           setState(() {
-            _annotations = list
-                .map((j) => MobileAnnotation.fromJson(j as Map<String, dynamic>))
-                .toList();
+            _annotations = merged;
             _connected = true;
           });
           _saveToStorage();
@@ -262,7 +326,7 @@ class AgentationState extends State<AgentationProvider> {
     }
   }
 
-  /// Create a new annotation. Works in both local and server mode.
+  /// Create a new annotation. Always local-first, then syncs to server.
   Future<void> createAnnotation({
     required double x,
     required double y,
@@ -270,33 +334,37 @@ class AgentationState extends State<AgentationProvider> {
     AnnotationIntent intent = AnnotationIntent.fix,
     AnnotationSeverity severity = AnnotationSeverity.important,
   }) async {
-    if (localMode) {
-      // Local-only mode: create annotation locally
-      final now = DateTime.now().toUtc().toIso8601String();
-      final annotation = MobileAnnotation(
-        id: '${DateTime.now().millisecondsSinceEpoch}-${(DateTime.now().microsecond).toRadixString(36)}',
-        sessionId: widget.config.sessionId ?? 'local',
-        x: x,
-        y: y,
-        deviceId: widget.config.deviceId ?? 'flutter-device',
-        platform: 'flutter',
-        screenWidth: 0,
-        screenHeight: 0,
-        comment: comment,
-        intent: intent,
-        severity: severity,
-        status: AnnotationStatus.pending,
-        thread: [],
-        createdAt: now,
-        updatedAt: now,
-      );
-      if (mounted) {
-        setState(() => _annotations = [..._annotations, annotation]);
-        _saveToStorage();
-      }
-    } else {
-      // Server mode: POST to server
-      if (widget.config.sessionId == null || _httpClient == null) return;
+    // Always create locally first
+    final now = DateTime.now().toUtc().toIso8601String();
+    final id = '${DateTime.now().millisecondsSinceEpoch}-${(DateTime.now().microsecond).toRadixString(36)}';
+    final annotation = MobileAnnotation(
+      id: id,
+      sessionId: widget.config.sessionId ?? 'local',
+      x: x,
+      y: y,
+      deviceId: widget.config.deviceId ?? 'flutter-device',
+      platform: 'flutter',
+      screenWidth: 0,
+      screenHeight: 0,
+      comment: comment,
+      intent: intent,
+      severity: severity,
+      status: AnnotationStatus.pending,
+      thread: [],
+      createdAt: now,
+      updatedAt: now,
+    );
+
+    _pendingIds.add(id);
+    _savePendingIds();
+
+    if (mounted) {
+      setState(() => _annotations = [..._annotations, annotation]);
+      _saveToStorage();
+    }
+
+    // If server mode, try to upload immediately
+    if (!localMode && _httpClient != null && widget.config.sessionId != null) {
       try {
         final uri = Uri.parse('${widget.config.serverUrl}/api/annotations');
         final request = await _httpClient!.postUrl(uri);
@@ -313,10 +381,14 @@ class AgentationState extends State<AgentationProvider> {
           'intent': intent.name,
           'severity': severity.name,
         }));
-        await request.close();
-        await _fetchAnnotations();
+        final response = await request.close();
+        if (response.statusCode == 200 || response.statusCode == 201) {
+          _pendingIds.remove(id);
+          _savePendingIds();
+          await _fetchAnnotations();
+        }
       } catch (_) {
-        // Silently fail — dev tool
+        // Stays in pending, will be uploaded on next fetch cycle
       }
     }
   }

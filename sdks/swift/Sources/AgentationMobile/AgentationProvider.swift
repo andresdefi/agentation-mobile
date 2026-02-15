@@ -38,11 +38,13 @@ public final class AgentationProvider: ObservableObject {
     public var localMode: Bool { config.serverUrl == nil }
 
     private static let storageKey = "agentation_mobile_annotations"
+    private static let pendingIdsKey = "agentation_mobile_pending_ids"
     private let pollInterval: TimeInterval = 3
     private var pollTimer: Timer?
     private let session = URLSession.shared
     private let decoder = JSONDecoder()
     private let encoder = JSONEncoder()
+    private var pendingIds: Set<String> = []
 
     private var reportTimer: Timer?
 
@@ -50,6 +52,7 @@ public final class AgentationProvider: ObservableObject {
         self.config = config
         guard config.enabled else { return }
         loadFromStorage()
+        loadPendingIds()
         AnimationDetector.shared.install()
         if !localMode {
             startPolling()
@@ -82,6 +85,62 @@ public final class AgentationProvider: ObservableObject {
         }
     }
 
+    private func loadPendingIds() {
+        guard let data = UserDefaults.standard.data(forKey: Self.pendingIdsKey) else { return }
+        do {
+            pendingIds = Set(try decoder.decode([String].self, from: data))
+        } catch {
+            // Ignore corrupted storage
+        }
+    }
+
+    private func savePendingIds() {
+        do {
+            let data = try encoder.encode(Array(pendingIds))
+            UserDefaults.standard.set(data, forKey: Self.pendingIdsKey)
+        } catch {
+            // Ignore storage write errors
+        }
+    }
+
+    // MARK: - Upload Pending
+
+    private func uploadPending() async {
+        guard let serverUrl = config.serverUrl,
+              !pendingIds.isEmpty else { return }
+
+        let pending = annotations.filter { pendingIds.contains($0.id) }
+        for annotation in pending {
+            guard let url = URL(string: "\(serverUrl)/api/annotations") else { continue }
+            do {
+                var request = URLRequest(url: url)
+                request.httpMethod = "POST"
+                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+                let input = CreateAnnotationInput(
+                    sessionId: annotation.sessionId,
+                    x: annotation.x,
+                    y: annotation.y,
+                    deviceId: annotation.deviceId,
+                    screenWidth: annotation.screenWidth,
+                    screenHeight: annotation.screenHeight,
+                    comment: annotation.comment,
+                    intent: annotation.intent,
+                    severity: annotation.severity
+                )
+                request.httpBody = try encoder.encode(input)
+                let (_, response) = try await session.data(for: request)
+                if let httpResponse = response as? HTTPURLResponse,
+                   httpResponse.statusCode == 200 || httpResponse.statusCode == 201 {
+                    pendingIds.remove(annotation.id)
+                }
+            } catch {
+                // Will retry on next fetch cycle
+            }
+        }
+        savePendingIds()
+    }
+
     // MARK: - Server Polling
 
     private func startPolling() {
@@ -102,11 +161,20 @@ public final class AgentationProvider: ObservableObject {
 
         Task {
             do {
+                // Upload pending annotations first
+                await uploadPending()
+
                 let (data, response) = try await session.data(from: url)
                 guard let httpResponse = response as? HTTPURLResponse,
                       httpResponse.statusCode == 200 else { return }
-                let fetched = try decoder.decode([MobileAnnotation].self, from: data)
-                annotations = fetched
+                let serverAnnotations = try decoder.decode([MobileAnnotation].self, from: data)
+
+                // Merge: server data + remaining unsynced locals
+                let serverIds = Set(serverAnnotations.map { $0.id })
+                let stillPending = annotations.filter {
+                    pendingIds.contains($0.id) && !serverIds.contains($0.id)
+                }
+                annotations = serverAnnotations + stillPending
                 connected = true
                 saveToStorage()
             } catch {
@@ -175,30 +243,34 @@ public final class AgentationProvider: ObservableObject {
         screenWidth: Int,
         screenHeight: Int
     ) async {
-        if localMode {
-            let now = ISO8601DateFormatter().string(from: Date())
-            let id = "\(Int(Date().timeIntervalSince1970 * 1000))-\(UUID().uuidString.prefix(7).lowercased())"
-            let annotation = MobileAnnotation(
-                id: id,
-                sessionId: config.sessionId ?? "local",
-                x: x,
-                y: y,
-                deviceId: config.deviceId ?? "ios-device",
-                platform: "ios-native",
-                screenWidth: screenWidth,
-                screenHeight: screenHeight,
-                comment: comment,
-                intent: intent,
-                severity: severity,
-                createdAt: now,
-                updatedAt: now
-            )
-            annotations.append(annotation)
-            saveToStorage()
-        } else {
-            guard let serverUrl = config.serverUrl,
-                  let url = URL(string: "\(serverUrl)/api/annotations") else { return }
+        // Always create locally first
+        let now = ISO8601DateFormatter().string(from: Date())
+        let id = "\(Int(Date().timeIntervalSince1970 * 1000))-\(UUID().uuidString.prefix(7).lowercased())"
+        let annotation = MobileAnnotation(
+            id: id,
+            sessionId: config.sessionId ?? "local",
+            x: x,
+            y: y,
+            deviceId: config.deviceId ?? "ios-device",
+            platform: "ios-native",
+            screenWidth: screenWidth,
+            screenHeight: screenHeight,
+            comment: comment,
+            intent: intent,
+            severity: severity,
+            createdAt: now,
+            updatedAt: now
+        )
 
+        pendingIds.insert(id)
+        savePendingIds()
+
+        annotations.append(annotation)
+        saveToStorage()
+
+        // If server mode, try to upload immediately
+        if !localMode, let serverUrl = config.serverUrl,
+           let url = URL(string: "\(serverUrl)/api/annotations") {
             let input = CreateAnnotationInput(
                 sessionId: config.sessionId ?? "",
                 x: x,
@@ -211,18 +283,20 @@ public final class AgentationProvider: ObservableObject {
                 severity: severity
             )
 
-            var request = URLRequest(url: url)
-            request.httpMethod = "POST"
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-
             do {
+                var request = URLRequest(url: url)
+                request.httpMethod = "POST"
+                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
                 request.httpBody = try encoder.encode(input)
                 let (_, response) = try await session.data(for: request)
-                guard let httpResponse = response as? HTTPURLResponse,
-                      httpResponse.statusCode == 200 || httpResponse.statusCode == 201 else { return }
-                fetchAnnotations()
+                if let httpResponse = response as? HTTPURLResponse,
+                   httpResponse.statusCode == 200 || httpResponse.statusCode == 201 {
+                    pendingIds.remove(id)
+                    savePendingIds()
+                    fetchAnnotations()
+                }
             } catch {
-                // Silently fail -- dev tool
+                // Stays in pending, will be uploaded on next fetch cycle
             }
         }
     }
