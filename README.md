@@ -18,6 +18,41 @@ npx agentation-mobile start
 # Hover to highlight, click to annotate, copy or MCP
 ```
 
+Your mobile app runs in a simulator/emulator. The web UI mirrors the screen — hover to see component names, click to annotate, write your feedback.
+
+### In-App SDKs
+
+For richer element data (component paths, source files, animations), add the SDK to your app:
+
+**React Native**
+```tsx
+import { AgentationProvider, AgentationOverlay } from '@agentation-mobile/react-native-sdk';
+
+export default function App() {
+  return (
+    <AgentationProvider>
+      <YourApp />
+      <AgentationOverlay />
+    </AgentationProvider>
+  );
+}
+```
+
+**Flutter**
+```dart
+import 'package:agentation_mobile/agentation_mobile.dart';
+
+void main() {
+  runApp(
+    AgentationProvider(
+      child: AgentationOverlay(child: MyApp()),
+    ),
+  );
+}
+```
+
+SDKs are also available for **Swift/SwiftUI** and **Kotlin/Jetpack Compose**.
+
 ### MCP
 
 Add to your Claude Code config (`~/.claude/mcp.json`):
@@ -40,11 +75,15 @@ Then tell your agent: _"address my feedback"_ or _"fix annotation 3."_
 - **Click to annotate** — Hover to highlight, click any element with automatic component identification
 - **Text selection** — OCR + native text regions for annotating specific text
 - **Area selection** — Drag to annotate any region, even empty space
+- **Captured pages** — Save screenshots with element trees for offline review and annotation
 - **Multi-platform** — React Native, Flutter, iOS native, Android native
-- **MCP server** — Tools for AI agent integration (Claude Code, Cursor, etc.)
+- **In-app SDKs** — Dev overlay with component paths, source files, and animation detection
+- **MCP server** — 18 tools for AI agent integration (Claude Code, Cursor, etc.)
+- **Watch mode** — Agent blocks waiting for new annotations, fixes them in a loop
 - **Structured output** — Copy markdown with component names, source paths, and context
 - **Live mirroring** — View device screens in the browser via scrcpy or screenshot polling
-- **In-app SDKs** — Dev overlay components for React Native, Flutter, Swift, and Kotlin
+- **Multi-device** — Tabbed UI for annotating across multiple devices simultaneously
+- **Animation detection** — Pause, inspect, and track animations across all platforms
 
 ## How it works
 
