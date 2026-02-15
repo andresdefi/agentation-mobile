@@ -3,7 +3,8 @@ import { writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { IPlatformBridge } from "@agentation-mobile/bridge-core";
-import { createServer } from "@agentation-mobile/server";
+import { Store } from "@agentation-mobile/core";
+import { EventBus, createServer } from "@agentation-mobile/server";
 import { Command } from "commander";
 
 const program = new Command();
@@ -47,19 +48,58 @@ program
 
 program
 	.command("mcp")
-	.description("Start the MCP server")
+	.description("Start the MCP server (auto-starts HTTP server + web UI)")
 	.option("-t, --transport <type>", "Transport type (stdio or http)", "stdio")
 	.option("--port <port>", "HTTP transport port", "4748")
+	.option("--server-port <port>", "HTTP server port for web UI", "4747")
+	.option("--no-server", "Skip auto-starting the HTTP server")
 	.action(async (options) => {
-		const { Store } = await import("@agentation-mobile/core");
-		const { EventBus, RecordingEngine } = await import("@agentation-mobile/server");
+		const { RecordingEngine } = await import("@agentation-mobile/server");
 		const { createMcpServer } = await import("@agentation-mobile/mcp");
 
-		const store = new Store();
-		const eventBus = new EventBus();
 		const bridges = await loadBridges();
-		const recordingEngine = new RecordingEngine(store, bridges);
+		// Use stderr for logging since stdout is the MCP stdio channel
+		const log = (msg: string) => process.stderr.write(`${msg}\n`);
 
+		let store: Store;
+		let eventBus: EventBus;
+
+		if (options.server !== false) {
+			// Auto-start HTTP server + web UI, sharing Store and EventBus with MCP
+			const serverPort = Number(options.serverPort);
+			let portAvailable = true;
+			try {
+				const res = await fetch(`http://localhost:${serverPort}/api/sessions`);
+				if (res.ok) portAvailable = false;
+			} catch {
+				// Connection refused = port is free
+			}
+
+			if (portAvailable) {
+				const cliDir = dirname(fileURLToPath(import.meta.url));
+				const webUiDir = join(cliDir, "..", "..", "web-ui", "dist");
+				const staticDir = existsSync(webUiDir) ? webUiDir : undefined;
+
+				const httpServer = createServer({
+					port: serverPort,
+					bridges,
+					staticDir,
+				});
+				await httpServer.start();
+				store = httpServer.store;
+				eventBus = httpServer.eventBus;
+				log(`HTTP server + web UI running at http://localhost:${serverPort}`);
+			} else {
+				log(`HTTP server already running on port ${serverPort}, connecting MCP to it`);
+				store = new Store();
+				eventBus = new EventBus();
+			}
+		} else {
+			store = new Store();
+			eventBus = new EventBus();
+		}
+
+		const recordingEngine = new RecordingEngine(store, bridges);
 		const server = createMcpServer({ store, eventBus, bridges, recordingEngine });
 
 		if (options.transport === "http") {
@@ -89,7 +129,7 @@ program
 
 			const mcpPort = Number(options.port);
 			mcpApp.listen(mcpPort, () => {
-				console.log(`MCP HTTP server running at http://localhost:${mcpPort}/mcp`);
+				log(`MCP HTTP server running at http://localhost:${mcpPort}/mcp`);
 			});
 		} else {
 			const { StdioServerTransport } = await import("@modelcontextprotocol/sdk/server/stdio.js");

@@ -10,19 +10,19 @@ Visual feedback for mobile apps. Point at elements on your phone screen, write f
 npm install agentation-mobile -D
 ```
 
-## Usage
+Or use yarn, pnpm, or bun.
 
-```bash
-npx agentation-mobile start
-# Open http://localhost:4747
-# Hover to highlight, click to annotate, copy or MCP
-```
+## Choose your setup
 
-Your mobile app runs in a simulator/emulator. The web UI mirrors the screen — hover to see component names, click to annotate, write your feedback.
+- **Just want annotations?** Basic Setup below (copy-paste to agent)
+- **Using Claude Code?** Add the `/agentation-mobile` skill (sets up SDK + MCP server)
+- **Building a custom agent?** Run MCP server manually for real-time sync
 
-### In-App SDKs
+Most users: Basic Setup. Claude Code users: Use the skill for full auto-setup.
 
-For richer element data (component paths, source files, animations), add the SDK to your app:
+## Basic Setup
+
+Add the SDK to your mobile app for component-level annotation data:
 
 **React Native**
 ```tsx
@@ -32,7 +32,7 @@ export default function App() {
   return (
     <AgentationProvider>
       <YourApp />
-      <AgentationOverlay />
+      {__DEV__ && <AgentationOverlay />}
     </AgentationProvider>
   );
 }
@@ -53,9 +53,35 @@ void main() {
 
 SDKs are also available for **Swift/SwiftUI** and **Kotlin/Jetpack Compose**.
 
-### MCP
+The overlay appears in dev/debug builds. It auto-connects to the server at `localhost:4747`.
 
-Add to your Claude Code config (`~/.claude/mcp.json`):
+## Claude Code
+
+Set up agentation-mobile automatically with the `/agentation-mobile` skill:
+
+```bash
+npx skills add andresdefi/agentation-mobile
+```
+
+Then in Claude Code:
+
+```
+/agentation-mobile
+```
+
+Detects your framework, installs the SDK, wires it into your app, and configures the MCP server for auto-start.
+
+## Agent Integration
+
+Connect agentation-mobile to any AI coding agent that supports MCP. The MCP server auto-starts the HTTP server and web UI — one command does everything.
+
+**Configure your agent:**
+
+```bash
+claude mcp add agentation-mobile -- npx @agentation-mobile/cli mcp
+```
+
+Or add to your project's `.mcp.json` for team-wide config:
 
 ```json
 {
@@ -68,7 +94,9 @@ Add to your Claude Code config (`~/.claude/mcp.json`):
 }
 ```
 
-Then tell your agent: _"address my feedback"_ or _"fix annotation 3."_
+The web UI opens at `http://localhost:4747`. Hover to highlight elements, click to annotate, write your feedback. Annotations sync to the agent in real-time.
+
+Other agents: Any tool that supports MCP can connect. Point your agent's MCP config to `npx @agentation-mobile/cli mcp` and it will have access to annotation tools like `agentation_mobile_get_all_pending`, `agentation_mobile_list_sessions`, and `agentation_mobile_resolve`.
 
 ## Features
 
