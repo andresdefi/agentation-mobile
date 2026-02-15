@@ -141,7 +141,7 @@ function patchTiming(): void {
 			config: { ...config, toValue: config.toValue },
 		};
 
-		const animation = originalTiming!(value, config);
+		const animation = (originalTiming as typeof Animated.timing)(value, config);
 		return wrapAnimationStart(animation, detected);
 	};
 }
@@ -172,7 +172,7 @@ function patchSpring(): void {
 			},
 		};
 
-		const animation = originalSpring!(value, config);
+		const animation = (originalSpring as typeof Animated.spring)(value, config);
 		return wrapAnimationStart(animation, detected);
 	};
 }
@@ -198,7 +198,7 @@ function patchDecay(): void {
 			},
 		};
 
-		const animation = originalDecay!(value, config);
+		const animation = (originalDecay as typeof Animated.decay)(value, config);
 		return wrapAnimationStart(animation, detected);
 	};
 }
@@ -220,7 +220,7 @@ function patchLoop(): void {
 			config: { iterations: config?.iterations ?? -1 },
 		};
 
-		const looped = originalLoop!(animation, config);
+		const looped = (originalLoop as typeof Animated.loop)(animation, config);
 		return wrapAnimationStart(looped, detected);
 	};
 }
@@ -241,7 +241,7 @@ function patchSequence(): void {
 			config: { count: animations.length },
 		};
 
-		const seq = originalSequence!(animations);
+		const seq = (originalSequence as typeof Animated.sequence)(animations);
 		return wrapAnimationStart(seq, detected);
 	};
 }
@@ -263,7 +263,7 @@ function patchParallel(): void {
 			config: { count: animations.length, stopTogether: config?.stopTogether },
 		};
 
-		const par = originalParallel!(animations, config);
+		const par = (originalParallel as typeof Animated.parallel)(animations, config);
 		return wrapAnimationStart(par, detected);
 	};
 }
@@ -282,7 +282,6 @@ export function installAnimationDetector(): void {
 	patchLoop();
 	patchSequence();
 	patchParallel();
-
 }
 
 /**
@@ -316,9 +315,9 @@ export function patchReanimated(reanimated: Record<string, unknown>): void {
 	try {
 		if (!reanimated) return;
 
-		const origWithTiming = reanimated.withTiming as Function | undefined;
-		const origWithSpring = reanimated.withSpring as Function | undefined;
-		const origWithDecay = reanimated.withDecay as Function | undefined;
+		const origWithTiming = reanimated.withTiming as ((...args: unknown[]) => unknown) | undefined;
+		const origWithSpring = reanimated.withSpring as ((...args: unknown[]) => unknown) | undefined;
+		const origWithDecay = reanimated.withDecay as ((...args: unknown[]) => unknown) | undefined;
 
 		if (origWithTiming) {
 			reanimated.withTiming = (
