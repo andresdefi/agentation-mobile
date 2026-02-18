@@ -11,3 +11,6 @@ export type AnnotationSeverity = z.infer<typeof AnnotationSeveritySchema>;
 
 export const AnnotationStatusSchema = z.enum(["pending", "acknowledged", "resolved", "dismissed"]);
 export type AnnotationStatus = z.infer<typeof AnnotationStatusSchema>;
+
+export const SessionStatusSchema = z.enum(["active", "approved", "closed"]);
+export type SessionStatus = z.infer<typeof SessionStatusSchema>;

@@ -1,10 +1,10 @@
-import type { Store } from "@agentation-mobile/core";
+import type { IStore } from "@agentation-mobile/core";
 import { Router } from "express";
 import type { EventBus } from "../event-bus";
 import type { RecordingEngine } from "../recording-engine";
 
 export function createRecordingRoutes(
-	store: Store,
+	store: IStore,
 	engine: RecordingEngine,
 	eventBus: EventBus,
 ): Router {
@@ -23,7 +23,7 @@ export function createRecordingRoutes(
 		}
 		try {
 			const recording = await engine.start(deviceId, fps ?? 10, sessionId);
-			eventBus.emit("recording:started", recording);
+			eventBus.emit("recording.started", recording);
 			res.json(recording);
 		} catch (err) {
 			res.status(500).json({ error: `Failed to start recording: ${err}` });
@@ -37,7 +37,7 @@ export function createRecordingRoutes(
 			res.status(404).json({ error: "Recording not found" });
 			return;
 		}
-		eventBus.emit("recording:stopped", recording);
+		eventBus.emit("recording.stopped", recording);
 		res.json(recording);
 	});
 

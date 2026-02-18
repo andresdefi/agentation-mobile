@@ -1,6 +1,6 @@
 import { type Server as HttpServer, createServer as createHttpServer } from "node:http";
 import type { IPlatformBridge } from "@agentation-mobile/bridge-core";
-import { Store, exportToJson, exportToMarkdown } from "@agentation-mobile/core";
+import { type IStore, createStore, exportToJson, exportToMarkdown } from "@agentation-mobile/core";
 import cors from "cors";
 import express, { type Express } from "express";
 import { WebSocket, WebSocketServer } from "ws";
@@ -26,18 +26,27 @@ export interface ServerConfig {
 
 export interface Server {
 	app: Express;
-	store: Store;
+	store: IStore;
 	eventBus: EventBus;
 	start: () => Promise<void>;
 	stop: () => void;
 }
 
 export function createServer(config: ServerConfig = {}): Server {
-	const { port = 4747, host = "localhost", bridges = [], staticDir, webhooks = [] } = config;
+	const envPort = Number(process.env.AGENTATION_MOBILE_PORT) || 4747;
+	const envWebhooks = parseEnvWebhooks();
+
+	const {
+		port = envPort,
+		host = "localhost",
+		bridges = [],
+		staticDir,
+		webhooks = envWebhooks,
+	} = config;
 
 	const app = express();
 	const httpServer = createHttpServer(app);
-	const store = new Store();
+	const store = createStore();
 	const eventBus = new EventBus();
 
 	// Webhooks
@@ -121,7 +130,7 @@ export function createServer(config: ServerConfig = {}): Server {
 		store.attachResolutionScreenshot(id, screenshotId);
 		const updated = store.getAnnotation(id);
 		if (updated) {
-			eventBus.emit("annotation:status", updated);
+			eventBus.emit("annotation.updated", updated, updated.sessionId, updated.deviceId);
 		}
 		res.json({ screenshotId, annotationId: id });
 	});
@@ -339,4 +348,22 @@ export function createServer(config: ServerConfig = {}): Server {
 			httpServer.close();
 		},
 	};
+}
+
+function parseEnvWebhooks(): WebhookConfig[] {
+	const secret = process.env.AGENTATION_MOBILE_WEBHOOK_SECRET;
+	const urls: string[] = [];
+
+	if (process.env.AGENTATION_MOBILE_WEBHOOK_URL) {
+		urls.push(process.env.AGENTATION_MOBILE_WEBHOOK_URL);
+	}
+	if (process.env.AGENTATION_MOBILE_WEBHOOKS) {
+		urls.push(
+			...process.env.AGENTATION_MOBILE_WEBHOOKS.split(",")
+				.map((u) => u.trim())
+				.filter(Boolean),
+		);
+	}
+
+	return urls.map((url) => ({ url, secret }));
 }

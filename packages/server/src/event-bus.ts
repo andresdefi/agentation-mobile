@@ -1,14 +1,16 @@
 import { EventEmitter } from "node:events";
 
 export type EventType =
-	| "annotation:created"
-	| "annotation:updated"
-	| "annotation:status"
-	| "annotation:reply"
-	| "session:created"
+	| "annotation.created"
+	| "annotation.updated"
+	| "annotation.deleted"
+	| "thread.message"
+	| "session.created"
+	| "session.updated"
+	| "session.closed"
 	| "action.requested"
-	| "recording:started"
-	| "recording:stopped";
+	| "recording.started"
+	| "recording.stopped";
 
 export interface BusEvent {
 	type: EventType;
@@ -16,10 +18,25 @@ export interface BusEvent {
 	timestamp: string;
 	sequence: number;
 	sessionId?: string;
+	deviceId?: string;
 }
+
+/** Default event retention period in days. */
+const DEFAULT_EVENT_RETENTION_DAYS = 7;
 
 /** Maximum number of events to retain for replay. */
 const DEFAULT_MAX_EVENTS = 1000;
+
+let eventRetentionDays =
+	Number(process.env.AGENTATION_MOBILE_EVENT_RETENTION_DAYS) || DEFAULT_EVENT_RETENTION_DAYS;
+
+export function getEventRetentionDays(): number {
+	return eventRetentionDays;
+}
+
+export function setEventRetentionDays(days: number): void {
+	eventRetentionDays = days;
+}
 
 export class EventBus extends EventEmitter {
 	private sequenceCounter = 0;
@@ -31,13 +48,19 @@ export class EventBus extends EventEmitter {
 		this.maxEvents = options?.maxEvents ?? DEFAULT_MAX_EVENTS;
 	}
 
-	emit(type: EventType, data: unknown, sessionId?: string): boolean {
+	/** Restore the sequence counter (e.g. from a persisted store on startup). */
+	setSequence(seq: number): void {
+		this.sequenceCounter = seq;
+	}
+
+	emit(type: EventType, data: unknown, sessionId?: string, deviceId?: string): boolean {
 		const event: BusEvent = {
 			type,
 			data,
 			timestamp: new Date().toISOString(),
 			sequence: ++this.sequenceCounter,
 			sessionId,
+			deviceId,
 		};
 
 		// Store for replay

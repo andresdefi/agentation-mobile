@@ -1,8 +1,8 @@
-import type { Store } from "@agentation-mobile/core";
+import type { IStore } from "@agentation-mobile/core";
 import { Router } from "express";
 import type { EventBus } from "../event-bus";
 
-export function createSessionRoutes(store: Store, eventBus: EventBus): Router {
+export function createSessionRoutes(store: IStore, eventBus: EventBus): Router {
 	const router = Router();
 
 	// List sessions
@@ -29,8 +29,25 @@ export function createSessionRoutes(store: Store, eventBus: EventBus): Router {
 			return;
 		}
 		const session = store.createSession({ name, deviceId, platform });
-		eventBus.emit("session:created", session);
+		eventBus.emit("session.created", session, session.id, deviceId);
 		res.status(201).json(session);
+	});
+
+	// Update session status
+	router.patch("/:id", (req, res) => {
+		const { status } = req.body;
+		if (!status || !["active", "approved", "closed"].includes(status)) {
+			res.status(400).json({ error: "status must be 'active', 'approved', or 'closed'" });
+			return;
+		}
+		const session = store.updateSessionStatus(req.params.id, status);
+		if (!session) {
+			res.status(404).json({ error: "Session not found" });
+			return;
+		}
+		const eventType = status === "closed" ? "session.closed" : "session.updated";
+		eventBus.emit(eventType, session, session.id, session.deviceId);
+		res.json(session);
 	});
 
 	// Get pending annotations for session

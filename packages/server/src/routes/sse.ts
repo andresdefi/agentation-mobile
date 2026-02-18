@@ -10,6 +10,18 @@ export function createSSERouter(eventBus: EventBus): Router {
 		res.setHeader("Connection", "keep-alive");
 		res.flushHeaders();
 
+		const filterDeviceId = req.query.deviceId as string | undefined;
+		const filterPlatform = req.query.platform as string | undefined;
+
+		const matchesFilter = (event: BusEvent): boolean => {
+			if (filterDeviceId && event.deviceId !== filterDeviceId) return false;
+			if (filterPlatform) {
+				const data = event.data as { platform?: string } | undefined;
+				if (data?.platform && data.platform !== filterPlatform) return false;
+			}
+			return true;
+		};
+
 		// Replay missed events if client reconnects with Last-Event-ID
 		const lastEventId = req.headers["last-event-id"];
 		if (lastEventId) {
@@ -17,6 +29,7 @@ export function createSSERouter(eventBus: EventBus): Router {
 			if (!Number.isNaN(sinceSequence)) {
 				const missed = eventBus.getEventsSince(sinceSequence);
 				for (const event of missed) {
+					if (!matchesFilter(event)) continue;
 					res.write(`id: ${event.sequence}\n`);
 					res.write(`event: ${event.type}\n`);
 					res.write(
@@ -27,6 +40,7 @@ export function createSSERouter(eventBus: EventBus): Router {
 		}
 
 		const handler = (event: BusEvent) => {
+			if (!matchesFilter(event)) return;
 			res.write(`id: ${event.sequence}\n`);
 			res.write(`event: ${event.type}\n`);
 			res.write(

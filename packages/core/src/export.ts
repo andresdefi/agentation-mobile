@@ -128,13 +128,28 @@ export function exportToAgentMarkdown(annotations: MobileAnnotation[], session?:
 	return lines.join("\n").trimEnd();
 }
 
+export type ComponentDetectionMode = "none" | "name-only" | "name-file" | "full-hierarchy";
+
+export function getDetectionModeForLevel(level: DetailLevel): ComponentDetectionMode {
+	switch (level) {
+		case "compact":
+			return "none";
+		case "standard":
+			return "name-file";
+		case "detailed":
+			return "full-hierarchy";
+		case "forensic":
+			return "full-hierarchy";
+	}
+}
+
 /**
  * Export annotations with configurable detail level.
  *
- * - compact: comment + intent + severity only
- * - standard: + position, device, component name (default)
- * - detailed: + element tree context, bounding boxes, thread
- * - forensic: + full element properties, accessibility, styles, nearby elements
+ * - compact: comment + intent + severity only (no component info)
+ * - standard: + position, device, component name + file
+ * - detailed: + full component path hierarchy, bounding boxes, thread
+ * - forensic: + accessibility, styles, animations, source location, timestamps
  */
 export function exportWithDetailLevel(
 	annotations: MobileAnnotation[],
@@ -142,6 +157,7 @@ export function exportWithDetailLevel(
 	session?: Session,
 ): string {
 	const lines: string[] = [];
+	const mode = getDetectionModeForLevel(level);
 
 	if (session) {
 		lines.push(`# ${session.name} — ${annotations.length} annotations`);
@@ -159,12 +175,12 @@ export function exportWithDetailLevel(
 		// All levels: intent/severity + comment
 		let ref = `${i + 1}. [${a.intent}/${a.severity}]`;
 
-		// Standard+: component name
-		if (level !== "compact" && a.element?.componentName) {
+		// Component info based on detection mode
+		if (mode !== "none" && a.element?.componentName) {
 			ref += ` ${a.element.componentName}`;
-			if (a.element.componentFile) {
+			if (mode === "name-file" && a.element.componentFile) {
 				ref += ` (${a.element.componentFile})`;
-			} else if (a.element.componentPath) {
+			} else if (mode === "full-hierarchy" && a.element.componentPath) {
 				ref += ` > ${a.element.componentPath}`;
 			}
 		}
@@ -184,10 +200,20 @@ export function exportWithDetailLevel(
 			lines.push(`   Device: ${a.deviceId} (${a.platform}) ${a.screenWidth}x${a.screenHeight}`);
 		}
 
-		// Detailed+: bounding box, component path, thread
+		// Detailed+: bounding box, component path, thread, source location
 		if (level === "detailed" || level === "forensic") {
 			if (a.element?.componentPath) {
 				lines.push(`   Path: ${a.element.componentPath}`);
+			}
+			if (a.element?.componentFile) {
+				let source = `   Source: ${a.element.componentFile}`;
+				if (a.element.sourceLocation) {
+					source += `:${a.element.sourceLocation.line}`;
+					if (a.element.sourceLocation.column != null) {
+						source += `:${a.element.sourceLocation.column}`;
+					}
+				}
+				lines.push(source);
 			}
 			if (a.element?.boundingBox) {
 				const bb = a.element.boundingBox;
@@ -200,7 +226,7 @@ export function exportWithDetailLevel(
 			}
 		}
 
-		// Forensic: full element properties
+		// Forensic: full element properties + animations
 		if (level === "forensic" && a.element) {
 			if (a.element.textContent) {
 				lines.push(`   Text: "${a.element.textContent}"`);
@@ -223,6 +249,18 @@ export function exportWithDetailLevel(
 			if (a.element.styleProps && Object.keys(a.element.styleProps).length > 0) {
 				lines.push(`   Styles: ${JSON.stringify(a.element.styleProps)}`);
 			}
+			if (a.element.animations && a.element.animations.length > 0) {
+				const animDescs = a.element.animations.map((anim) => {
+					let desc = `${anim.property} (${anim.type})`;
+					if (anim.status) desc += ` [${anim.status}]`;
+					if (anim.duration) desc += ` ${anim.duration}ms`;
+					if (anim.sourceLocation) {
+						desc += ` @ ${anim.sourceLocation.file}:${anim.sourceLocation.line}`;
+					}
+					return desc;
+				});
+				lines.push(`   Animations: ${animDescs.join("; ")}`);
+			}
 			lines.push(`   Created: ${a.createdAt} | Updated: ${a.updatedAt}`);
 		}
 
@@ -230,6 +268,69 @@ export function exportWithDetailLevel(
 	}
 
 	return lines.join("\n").trimEnd();
+}
+
+/**
+ * AFS (Agentation Format Standard) annotation representation.
+ * Maps mobile-specific field names to Agentation's web-oriented naming.
+ */
+export interface AFSAnnotation {
+	id: string;
+	sessionId: string;
+	x: number;
+	y: number;
+	deviceId: string;
+	platform: string;
+	screenWidth: number;
+	screenHeight: number;
+	comment: string;
+	intent: string;
+	severity: string;
+	status: string;
+	element?: string;
+	elementPath?: string;
+	elementFile?: string;
+	sourceLocation?: { file: string; line: number; column?: number };
+	selectedArea?: { x: number; y: number; width: number; height: number };
+	selectedText?: string;
+	thread: Array<{ id: string; role: string; content: string; timestamp: string }>;
+	createdAt: string;
+	updatedAt: string;
+}
+
+/**
+ * Convert a MobileAnnotation to the Agentation Format Standard (AFS).
+ * Maps componentName → element, componentPath → elementPath, etc.
+ */
+export function toAFS(annotation: MobileAnnotation): AFSAnnotation {
+	return {
+		id: annotation.id,
+		sessionId: annotation.sessionId,
+		x: annotation.x,
+		y: annotation.y,
+		deviceId: annotation.deviceId,
+		platform: annotation.platform,
+		screenWidth: annotation.screenWidth,
+		screenHeight: annotation.screenHeight,
+		comment: annotation.comment,
+		intent: annotation.intent,
+		severity: annotation.severity,
+		status: annotation.status,
+		element: annotation.element?.componentName,
+		elementPath: annotation.element?.componentPath,
+		elementFile: annotation.element?.componentFile,
+		sourceLocation: annotation.element?.sourceLocation,
+		selectedArea: annotation.selectedArea,
+		selectedText: annotation.selectedText,
+		thread: annotation.thread.map((m) => ({
+			id: (m as { id?: string }).id ?? "",
+			role: m.role,
+			content: m.content,
+			timestamp: m.timestamp,
+		})),
+		createdAt: annotation.createdAt,
+		updatedAt: annotation.updatedAt,
+	};
 }
 
 export function formatGitHubIssueBody(annotation: MobileAnnotation, session?: Session): string {

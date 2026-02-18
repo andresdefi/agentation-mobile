@@ -1,9 +1,14 @@
-import { existsSync } from "node:fs";
+import { execFile as execFileCb } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFileCb);
 import type { IPlatformBridge } from "@agentation-mobile/bridge-core";
-import { Store } from "@agentation-mobile/core";
+import { createStore } from "@agentation-mobile/core";
 import { EventBus, createServer } from "@agentation-mobile/server";
 import { Command } from "commander";
 
@@ -20,21 +25,38 @@ program
 	.option("-p, --port <port>", "Server port", "4747")
 	.option("-w, --webhook <url...>", "Webhook URLs for annotation events")
 	.option("--webhook-secret <secret>", "HMAC secret for webhook signature verification")
+	.option("--store <type>", "Store type (sqlite or memory)")
 	.action(async (options) => {
 		const bridges = await loadBridges();
-		const secret = options.webhookSecret as string | undefined;
-		const webhooks =
-			(options.webhook as string[] | undefined)?.map((url: string) => ({
-				url,
-				secret,
-			})) ?? [];
+		const secret =
+			(options.webhookSecret as string | undefined) ?? process.env.AGENTATION_MOBILE_WEBHOOK_SECRET;
+		const cliWebhooks = options.webhook as string[] | undefined;
+		const envWebhookUrl = process.env.AGENTATION_MOBILE_WEBHOOK_URL;
+		const envWebhooks = process.env.AGENTATION_MOBILE_WEBHOOKS;
+
+		const webhookUrls: string[] = cliWebhooks ?? [];
+		if (webhookUrls.length === 0) {
+			if (envWebhookUrl) webhookUrls.push(envWebhookUrl);
+			if (envWebhooks) {
+				webhookUrls.push(
+					...envWebhooks
+						.split(",")
+						.map((u) => u.trim())
+						.filter(Boolean),
+				);
+			}
+		}
+
+		const webhooks = webhookUrls.map((url) => ({ url, secret }));
+		const port = Number(options.port) || Number(process.env.AGENTATION_MOBILE_PORT) || 4747;
+
 		// Resolve web-ui dist directory relative to this package
 		const cliDir = dirname(fileURLToPath(import.meta.url));
 		const webUiDir = join(cliDir, "..", "..", "web-ui", "dist");
 		const staticDir = existsSync(webUiDir) ? webUiDir : undefined;
 
 		const server = createServer({
-			port: Number(options.port),
+			port,
 			bridges,
 			webhooks,
 			staticDir,
@@ -61,7 +83,7 @@ program
 		// Use stderr for logging since stdout is the MCP stdio channel
 		const log = (msg: string) => process.stderr.write(`${msg}\n`);
 
-		let store: Store;
+		let store: import("@agentation-mobile/core").IStore;
 		let eventBus: EventBus;
 
 		if (options.server !== false) {
@@ -91,11 +113,11 @@ program
 				log(`HTTP server + web UI running at http://localhost:${serverPort}`);
 			} else {
 				log(`HTTP server already running on port ${serverPort}, connecting MCP to it`);
-				store = new Store();
+				store = createStore({ type: "memory" });
 				eventBus = new EventBus();
 			}
 		} else {
-			store = new Store();
+			store = createStore({ type: "memory" });
 			eventBus = new EventBus();
 		}
 
@@ -423,8 +445,9 @@ program
 
 program
 	.command("init")
-	.description("Set up agentation-mobile SDK in your project")
-	.action(async () => {
+	.description("Set up agentation-mobile SDK in your project and register MCP with Claude Code")
+	.option("--skip-mcp", "Skip MCP registration with Claude Code")
+	.action(async (options) => {
 		const cwd = process.cwd();
 		const framework = detectFramework(cwd);
 
@@ -437,6 +460,27 @@ program
 			console.log("  React Native: npm install @agentation-mobile/react-native-sdk");
 			console.log("  Flutter:      flutter pub add agentation_mobile --dev");
 			process.exit(1);
+		}
+
+		// Register MCP with Claude Code
+		if (!options.skipMcp) {
+			console.log("Registering MCP server with Claude Code...");
+			try {
+				await execFileAsync("claude", [
+					"mcp",
+					"add",
+					"agentation-mobile",
+					"--",
+					"npx",
+					"@agentation-mobile/cli",
+					"mcp",
+				]);
+				console.log("MCP server registered successfully.");
+			} catch {
+				console.log("Could not register MCP automatically. You can register manually with:");
+				console.log("  claude mcp add agentation-mobile -- npx @agentation-mobile/cli mcp");
+			}
+			console.log("");
 		}
 
 		if (framework === "react-native") {
@@ -489,6 +533,116 @@ program
 			console.log(
 				"The overlay will appear in debug builds. It auto-connects to the server at localhost:4747.",
 			);
+		}
+	});
+
+program
+	.command("doctor")
+	.description("Check system prerequisites and diagnose issues")
+	.option("-p, --port <port>", "Server port to check", "4747")
+	.action(async (options) => {
+		let hasIssues = false;
+
+		// Check Node.js version
+		const nodeVersion = process.versions.node;
+		const major = Number.parseInt(nodeVersion.split(".")[0], 10);
+		if (major >= 20) {
+			console.log(`  Node.js ${nodeVersion}`);
+		} else {
+			console.log(`  Node.js ${nodeVersion} (requires >= 20)`);
+			hasIssues = true;
+		}
+
+		// Check Claude Code config for agentation-mobile entry
+		const claudeConfigPath = join(homedir(), ".claude.json");
+		let claudeConfigured = false;
+		if (existsSync(claudeConfigPath)) {
+			try {
+				const config = readFileSync(claudeConfigPath, "utf-8");
+				claudeConfigured = config.includes("agentation-mobile");
+			} catch {
+				// can't read
+			}
+		}
+		// Also check ~/.claude/mcp_servers.json
+		const mcpServersPath = join(homedir(), ".claude", "mcp_servers.json");
+		if (!claudeConfigured && existsSync(mcpServersPath)) {
+			try {
+				const config = readFileSync(mcpServersPath, "utf-8");
+				claudeConfigured = config.includes("agentation-mobile");
+			} catch {
+				// can't read
+			}
+		}
+
+		if (claudeConfigured) {
+			console.log("  Claude Code MCP: configured");
+		} else {
+			console.log(
+				"  Claude Code MCP: not configured (run: claude mcp add agentation-mobile -- npx @agentation-mobile/cli mcp)",
+			);
+			hasIssues = true;
+		}
+
+		// Check server health
+		const port = Number(options.port);
+		try {
+			const res = await fetch(`http://localhost:${port}/api/health`, {
+				signal: AbortSignal.timeout(3000),
+			});
+			if (res.ok) {
+				console.log(`  Server: running on port ${port}`);
+			} else {
+				console.log(`  Server: responded with ${res.status} on port ${port}`);
+				hasIssues = true;
+			}
+		} catch {
+			console.log(`  Server: not running on port ${port}`);
+			hasIssues = true;
+		}
+
+		// Check connected devices via bridges
+		const bridges = await loadBridges();
+		if (bridges.length > 0) {
+			let totalDevices = 0;
+			for (const bridge of bridges) {
+				try {
+					const devices = await bridge.listDevices();
+					totalDevices += devices.length;
+					if (devices.length > 0) {
+						console.log(
+							`  ${bridge.platform}: ${devices.length} device(s) (${devices.map((d) => d.name).join(", ")})`,
+						);
+					} else {
+						console.log(`  ${bridge.platform}: no devices`);
+					}
+				} catch {
+					console.log(`  ${bridge.platform}: error listing devices`);
+				}
+			}
+			if (totalDevices === 0) {
+				hasIssues = true;
+			}
+		} else {
+			console.log("  Bridges: none available");
+			hasIssues = true;
+		}
+
+		// Check SQLite store
+		const storePath = join(homedir(), ".agentation-mobile", "store.db");
+		if (existsSync(storePath)) {
+			console.log(`  Store: ${storePath}`);
+		} else {
+			console.log("  Store: not yet created (starts on first server run)");
+		}
+
+		if (hasIssues) {
+			console.log("");
+			console.log("Some checks failed. Fix the issues above for the best experience.");
+			process.exit(1);
+		} else {
+			console.log("");
+			console.log("All checks passed!");
 		}
 	});
 

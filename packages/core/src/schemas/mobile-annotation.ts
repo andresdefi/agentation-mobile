@@ -3,6 +3,7 @@ import { AnnotationIntentSchema, AnnotationSeveritySchema, AnnotationStatusSchem
 import { MobileElementSchema } from "./mobile-element";
 
 export const ThreadMessageSchema = z.object({
+	id: z.string(),
 	role: z.enum(["human", "agent"]),
 	content: z.string(),
 	timestamp: z.string().datetime(),

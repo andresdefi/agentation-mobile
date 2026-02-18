@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import type { IPlatformBridge } from "@agentation-mobile/bridge-core";
-import type { Recording, Store } from "@agentation-mobile/core";
+import type { IStore, Recording } from "@agentation-mobile/core";
 import { findBridgeForDevice } from "./bridge-cache";
 
 interface RecordingSession {
@@ -14,7 +14,7 @@ export class RecordingEngine {
 	private activeSessions = new Map<string, RecordingSession>();
 
 	constructor(
-		private readonly store: Store,
+		private readonly store: IStore,
 		private readonly bridges: IPlatformBridge[],
 	) {}
 

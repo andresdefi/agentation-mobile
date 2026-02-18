@@ -42,7 +42,8 @@
 			".turbo",
 			"sdks/swift/.build",
 			"sdks/kotlin/.gradle",
-			"sdks/kotlin/build"
+			"sdks/kotlin/build",
+			"schema"
 		]
 	}
 }

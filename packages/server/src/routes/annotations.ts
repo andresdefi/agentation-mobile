@@ -1,8 +1,8 @@
-import type { Store } from "@agentation-mobile/core";
+import type { IStore } from "@agentation-mobile/core";
 import { Router } from "express";
 import type { EventBus } from "../event-bus";
 
-export function createAnnotationRoutes(store: Store, eventBus: EventBus): Router {
+export function createAnnotationRoutes(store: IStore, eventBus: EventBus): Router {
 	const router = Router();
 
 	// Get all pending across all sessions
@@ -53,11 +53,13 @@ export function createAnnotationRoutes(store: Store, eventBus: EventBus): Router
 			return;
 		}
 
+		const resolvedDeviceId = deviceId || session.deviceId;
+
 		const annotation = store.createAnnotation({
 			sessionId,
 			x,
 			y,
-			deviceId: deviceId || session.deviceId,
+			deviceId: resolvedDeviceId,
 			platform: platform || session.platform,
 			screenWidth: screenWidth || 0,
 			screenHeight: screenHeight || 0,
@@ -71,18 +73,24 @@ export function createAnnotationRoutes(store: Store, eventBus: EventBus): Router
 			selectedText,
 		});
 
-		eventBus.emit("annotation:created", annotation, annotation.sessionId);
+		eventBus.emit("annotation.created", annotation, annotation.sessionId, resolvedDeviceId);
 		res.status(201).json(annotation);
 	});
 
 	// Delete annotation
 	router.delete("/:id", (req, res) => {
+		const annotation = store.getAnnotation(req.params.id);
 		const deleted = store.deleteAnnotation(req.params.id);
 		if (!deleted) {
 			res.status(404).json({ error: "Annotation not found" });
 			return;
 		}
-		eventBus.emit("annotation:deleted", { id: req.params.id }, undefined);
+		eventBus.emit(
+			"annotation.deleted",
+			{ id: req.params.id },
+			annotation?.sessionId,
+			annotation?.deviceId,
+		);
 		res.json({ deleted: true });
 	});
 
@@ -93,7 +101,7 @@ export function createAnnotationRoutes(store: Store, eventBus: EventBus): Router
 			res.status(404).json({ error: "Annotation not found" });
 			return;
 		}
-		eventBus.emit("annotation:status", annotation, annotation.sessionId);
+		eventBus.emit("annotation.updated", annotation, annotation.sessionId, annotation.deviceId);
 		res.json(annotation);
 	});
 
@@ -104,18 +112,26 @@ export function createAnnotationRoutes(store: Store, eventBus: EventBus): Router
 			res.status(404).json({ error: "Annotation not found" });
 			return;
 		}
-		eventBus.emit("annotation:status", annotation, annotation.sessionId);
+		eventBus.emit("annotation.updated", annotation, annotation.sessionId, annotation.deviceId);
 		res.json(annotation);
 	});
 
 	// Dismiss
 	router.post("/:id/dismiss", (req, res) => {
+		const { reason } = req.body ?? {};
+		if (reason) {
+			store.addThreadMessage(req.params.id, {
+				role: "agent",
+				content: `Dismissed: ${reason}`,
+				timestamp: new Date().toISOString(),
+			});
+		}
 		const annotation = store.updateAnnotationStatus(req.params.id, "dismissed");
 		if (!annotation) {
 			res.status(404).json({ error: "Annotation not found" });
 			return;
 		}
-		eventBus.emit("annotation:status", annotation, annotation.sessionId);
+		eventBus.emit("annotation.updated", annotation, annotation.sessionId, annotation.deviceId);
 		res.json(annotation);
 	});
 
@@ -131,6 +147,7 @@ export function createAnnotationRoutes(store: Store, eventBus: EventBus): Router
 			"action.requested",
 			{ annotationId: annotation.id, annotation, prompt: prompt || null },
 			annotation.sessionId,
+			annotation.deviceId,
 		);
 		res.json({ requested: true, annotationId: annotation.id });
 	});
@@ -151,7 +168,7 @@ export function createAnnotationRoutes(store: Store, eventBus: EventBus): Router
 			res.status(404).json({ error: "Annotation not found" });
 			return;
 		}
-		eventBus.emit("annotation:reply", annotation, annotation.sessionId);
+		eventBus.emit("thread.message", annotation, annotation.sessionId, annotation.deviceId);
 		res.json(annotation);
 	});
 

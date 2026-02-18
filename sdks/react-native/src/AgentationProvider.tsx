@@ -21,6 +21,8 @@ export interface AgentationConfig {
 	deviceId?: string;
 	sessionId?: string;
 	enabled?: boolean;
+	/** Optional webhook URL for in-app event delivery. Events are POSTed as JSON. */
+	webhookUrl?: string;
 }
 
 export interface AgentationContextValue {
@@ -47,11 +49,20 @@ function generateId(): string {
 	return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
+function fireWebhook(webhookUrl: string, event: string, data: unknown): void {
+	fetch(webhookUrl, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({ event, data, timestamp: new Date().toISOString() }),
+	}).catch(() => {});
+}
+
 export function AgentationProvider({
 	serverUrl,
 	deviceId,
 	sessionId,
 	enabled = true,
+	webhookUrl,
 	children,
 }: AgentationConfig & { children: React.ReactNode }) {
 	const [annotations, setAnnotations] = useState<MobileAnnotation[]>([]);
@@ -264,6 +275,11 @@ export function AgentationProvider({
 				return next;
 			});
 
+			// Fire webhook event
+			if (webhookUrl) {
+				fireWebhook(webhookUrl, "annotation.add", annotation);
+			}
+
 			// If server mode, try to upload immediately
 			if (!localMode && normalizedUrl) {
 				try {
@@ -282,7 +298,7 @@ export function AgentationProvider({
 				}
 			}
 		},
-		[localMode, normalizedUrl, fetchAnnotations, persistAnnotations, persistPendingIds],
+		[localMode, normalizedUrl, webhookUrl, fetchAnnotations, persistAnnotations, persistPendingIds],
 	);
 
 	// Export annotations as structured text (for sharing/pasting into AI tools)

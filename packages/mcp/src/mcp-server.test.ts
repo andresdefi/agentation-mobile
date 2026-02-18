@@ -169,7 +169,7 @@ describe("MCP Server", () => {
 			});
 			const result = await client.callTool({
 				name: "agentation_mobile_dismiss",
-				arguments: { annotationId: annotation.id },
+				arguments: { annotationId: annotation.id, reason: "Not relevant" },
 			});
 			const text = (result.content as Array<{ type: string; text: string }>)[0].text;
 			const data = JSON.parse(text);
@@ -399,7 +399,7 @@ describe("MCP Server", () => {
 					intent: "fix",
 					severity: "important",
 				});
-				eventBus.emit("annotation:created", annotation);
+				eventBus.emit("annotation.created", annotation);
 			}, 50);
 
 			const result = await watchPromise;
@@ -447,7 +447,7 @@ describe("MCP Server", () => {
 					intent: "fix",
 					severity: "important",
 				});
-				eventBus.emit("annotation:created", a1);
+				eventBus.emit("annotation.created", a1);
 			}, 30);
 
 			setTimeout(() => {
@@ -463,7 +463,7 @@ describe("MCP Server", () => {
 					intent: "change",
 					severity: "suggestion",
 				});
-				eventBus.emit("annotation:created", a2);
+				eventBus.emit("annotation.created", a2);
 			}, 80);
 
 			const result = await watchPromise;
@@ -497,7 +497,7 @@ describe("MCP Server", () => {
 					intent: "fix",
 					severity: "important",
 				});
-				eventBus.emit("annotation:created", a1);
+				eventBus.emit("annotation.created", a1);
 			}, 30);
 
 			// Emit annotation for correct session
@@ -514,7 +514,7 @@ describe("MCP Server", () => {
 					intent: "fix",
 					severity: "important",
 				});
-				eventBus.emit("annotation:created", a2);
+				eventBus.emit("annotation.created", a2);
 			}, 60);
 
 			const result = await watchPromise;

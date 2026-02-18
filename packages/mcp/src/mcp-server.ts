@@ -5,8 +5,8 @@ import {
 	SourceMapResolver,
 } from "@agentation-mobile/bridge-core";
 import {
+	type IStore,
 	type MobileElement,
-	type Store,
 	exportToJson,
 	exportToMarkdown,
 	exportWithDetailLevel,
@@ -16,7 +16,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
 interface McpServerDeps {
-	store: Store;
+	store: IStore;
 	eventBus: EventBus;
 	bridges: IPlatformBridge[];
 	recordingEngine?: RecordingEngine;
@@ -120,7 +120,7 @@ export function createMcpServer(deps: McpServerDeps) {
 			if (!annotation) {
 				return { content: [{ type: "text", text: "Annotation not found" }], isError: true };
 			}
-			eventBus.emit("annotation:status", annotation);
+			eventBus.emit("annotation.updated", annotation, annotation.sessionId, annotation.deviceId);
 			return { content: [{ type: "text", text: JSON.stringify(annotation, null, 2) }] };
 		},
 	);
@@ -143,7 +143,7 @@ export function createMcpServer(deps: McpServerDeps) {
 			if (!annotation) {
 				return { content: [{ type: "text", text: "Annotation not found" }], isError: true };
 			}
-			eventBus.emit("annotation:status", annotation);
+			eventBus.emit("annotation.updated", annotation, annotation.sessionId, annotation.deviceId);
 			return { content: [{ type: "text", text: JSON.stringify(annotation, null, 2) }] };
 		},
 	);
@@ -169,7 +169,7 @@ export function createMcpServer(deps: McpServerDeps) {
 				if (!annotation) {
 					return { content: [{ type: "text", text: "Annotation not found" }], isError: true };
 				}
-				eventBus.emit("annotation:status", annotation);
+				eventBus.emit("annotation.updated", annotation, annotation.sessionId, annotation.deviceId);
 				const base64 = screenshot.toString("base64");
 				return {
 					content: [
@@ -191,14 +191,22 @@ export function createMcpServer(deps: McpServerDeps) {
 
 	server.tool(
 		"agentation_mobile_dismiss",
-		"Dismiss an annotation",
-		{ annotationId: z.string().describe("Annotation ID") },
-		async ({ annotationId }) => {
+		"Dismiss an annotation with a reason explaining why it was dismissed",
+		{
+			annotationId: z.string().describe("Annotation ID"),
+			reason: z.string().describe("Reason for dismissing the annotation"),
+		},
+		async ({ annotationId, reason }) => {
+			store.addThreadMessage(annotationId, {
+				role: "agent",
+				content: `Dismissed: ${reason}`,
+				timestamp: new Date().toISOString(),
+			});
 			const annotation = store.updateAnnotationStatus(annotationId, "dismissed");
 			if (!annotation) {
 				return { content: [{ type: "text", text: "Annotation not found" }], isError: true };
 			}
-			eventBus.emit("annotation:status", annotation);
+			eventBus.emit("annotation.updated", annotation, annotation.sessionId, annotation.deviceId);
 			return { content: [{ type: "text", text: JSON.stringify(annotation, null, 2) }] };
 		},
 	);
@@ -222,7 +230,7 @@ export function createMcpServer(deps: McpServerDeps) {
 					isError: true,
 				};
 			}
-			eventBus.emit("annotation:reply", annotation);
+			eventBus.emit("thread.message", annotation, annotation.sessionId, annotation.deviceId);
 			return {
 				content: [{ type: "text", text: JSON.stringify(annotation, null, 2) }],
 			};
@@ -317,7 +325,7 @@ export function createMcpServer(deps: McpServerDeps) {
 				};
 
 				const handler = (event: BusEvent) => {
-					if (event.type !== "annotation:created" && event.type !== "action.requested") return;
+					if (event.type !== "annotation.created" && event.type !== "action.requested") return;
 					if (sessionId) {
 						const data = event.data as { sessionId?: string };
 						if (data.sessionId !== sessionId) return;
@@ -543,7 +551,7 @@ export function createMcpServer(deps: McpServerDeps) {
 				element: element ?? undefined,
 			});
 
-			eventBus.emit("annotation:created", annotation, sessionId);
+			eventBus.emit("annotation.created", annotation, sessionId, annotation.deviceId);
 			const enriched = enrichAnnotation(annotation as unknown as Record<string, unknown>);
 
 			return {
@@ -1027,7 +1035,7 @@ export function createMcpServer(deps: McpServerDeps) {
 			}
 			try {
 				const recording = await recordingEngine.start(deviceId, fps, sessionId);
-				eventBus.emit("recording:started", recording);
+				eventBus.emit("recording.started", recording);
 				return {
 					content: [{ type: "text", text: JSON.stringify(recording, null, 2) }],
 				};
@@ -1060,7 +1068,7 @@ export function createMcpServer(deps: McpServerDeps) {
 					isError: true,
 				};
 			}
-			eventBus.emit("recording:stopped", recording);
+			eventBus.emit("recording.stopped", recording);
 			return {
 				content: [{ type: "text", text: JSON.stringify(recording, null, 2) }],
 			};

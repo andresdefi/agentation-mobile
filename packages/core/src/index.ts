@@ -6,7 +6,11 @@ export {
 	type MobileElement,
 	type SourceLocation,
 } from "./schemas/mobile-element";
-export { MobileAnnotationSchema, type MobileAnnotation } from "./schemas/mobile-annotation";
+export {
+	MobileAnnotationSchema,
+	ThreadMessageSchema,
+	type MobileAnnotation,
+} from "./schemas/mobile-annotation";
 export {
 	SessionSchema,
 	SessionDeviceSchema,
@@ -18,10 +22,12 @@ export {
 	type AnnotationIntent,
 	type AnnotationSeverity,
 	type AnnotationStatus,
+	type SessionStatus,
 	PlatformSchema,
 	AnnotationIntentSchema,
 	AnnotationSeveritySchema,
 	AnnotationStatusSchema,
+	SessionStatusSchema,
 } from "./schemas/enums";
 export {
 	RecordingSchema,
@@ -32,6 +38,11 @@ export {
 } from "./schemas/recording";
 export { Store } from "./store";
 export type { CreateSessionInput, CreateAnnotationInput, ThreadMessage } from "./store";
+export type { IStore } from "./store-interface";
+export { SqliteStore } from "./sqlite-store";
+export type { SqliteStoreOptions } from "./sqlite-store";
+export { createStore } from "./create-store";
+export type { StoreType, CreateStoreOptions } from "./create-store";
 export {
 	exportToJson,
 	exportToMarkdown,
@@ -39,8 +50,10 @@ export {
 	exportWithDetailLevel,
 	formatElementName,
 	formatGitHubIssueBody,
+	toAFS,
 } from "./export";
-export type { DetailLevel, ExportData } from "./export";
+export type { DetailLevel, ExportData, AFSAnnotation, ComponentDetectionMode } from "./export";
+export { getDetectionModeForLevel } from "./export";
 export {
 	generateAnnotationJsonSchema,
 	generateElementJsonSchema,

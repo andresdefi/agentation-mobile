@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
-import type { AnnotationStatus } from "./schemas/enums";
+import type { AnnotationStatus, SessionStatus } from "./schemas/enums";
 import type { MobileAnnotation } from "./schemas/mobile-annotation";
 import type { Recording, RecordingFrame } from "./schemas/recording";
 import type { Session } from "./schemas/session";
+import type { IStore } from "./store-interface";
 
 export interface CreateSessionInput {
 	name: string;
@@ -29,6 +30,7 @@ export interface CreateAnnotationInput {
 }
 
 export interface ThreadMessage {
+	id?: string;
 	role: "human" | "agent";
 	content: string;
 	timestamp: string;
@@ -50,7 +52,7 @@ interface StoredScreenshot {
 	storedAt: number;
 }
 
-export class Store {
+export class Store implements IStore {
 	private sessions = new Map<string, Session>();
 	private annotations = new Map<string, MobileAnnotation>();
 	private screenshots = new Map<string, StoredScreenshot>();
@@ -72,6 +74,7 @@ export class Store {
 			name: input.name,
 			deviceId: input.deviceId,
 			platform: input.platform,
+			status: "active",
 			devices: [{ deviceId: input.deviceId, platform: input.platform, addedAt: now }],
 			createdAt: now,
 			updatedAt: now,
@@ -97,6 +100,14 @@ export class Store {
 		const session = this.sessions.get(sessionId);
 		if (!session) return undefined;
 		session.devices = session.devices.filter((d) => d.deviceId !== deviceId);
+		session.updatedAt = new Date().toISOString();
+		return session;
+	}
+
+	updateSessionStatus(id: string, status: SessionStatus): Session | undefined {
+		const session = this.sessions.get(id);
+		if (!session) return undefined;
+		session.status = status;
 		session.updatedAt = new Date().toISOString();
 		return session;
 	}
@@ -172,7 +183,7 @@ export class Store {
 	addThreadMessage(id: string, message: ThreadMessage): MobileAnnotation | undefined {
 		const annotation = this.annotations.get(id);
 		if (!annotation) return undefined;
-		annotation.thread.push(message);
+		annotation.thread.push({ ...message, id: message.id ?? randomUUID() });
 		annotation.updatedAt = new Date().toISOString();
 		return annotation;
 	}
@@ -298,6 +309,10 @@ export class Store {
 			}
 		}
 		return best ?? frames[0];
+	}
+
+	close(): void {
+		// No-op for in-memory store
 	}
 
 	private evictExpiredScreenshots(): void {

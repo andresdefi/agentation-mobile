@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { SessionStatusSchema } from "./enums";
 
 export const SessionDeviceSchema = z.object({
 	deviceId: z.string(),
@@ -13,6 +14,7 @@ export const SessionSchema = z.object({
 	name: z.string(),
 	deviceId: z.string(),
 	platform: z.string(),
+	status: SessionStatusSchema.default("active"),
 	devices: z.array(SessionDeviceSchema).default([]),
 	createdAt: z.string().datetime(),
 	updatedAt: z.string().datetime(),
